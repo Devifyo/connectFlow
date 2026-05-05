@@ -182,8 +182,84 @@ function formatTime(dateStr) {
     return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
 }
 
+// --- Attendance ---
+const attendanceDays = ref([]);
+const attendanceSummary = ref({ total_worked_hours: 0, present_days: 0, absent_days: 0, avg_hours_per_day: 0 });
+const attendanceMonth = ref(new Date().getMonth() + 1);
+const attendanceYear = ref(new Date().getFullYear());
+const attendanceMonthName = ref('');
+const isLoadingAttendance = ref(false);
+const expandedDay = ref(null);
+
+async function fetchAttendance() {
+    isLoadingAttendance.value = true;
+    try {
+        const { data } = await axios.get('/api/time/attendance', {
+            params: { year: attendanceYear.value, month: attendanceMonth.value }
+        });
+        attendanceDays.value = data.days;
+        attendanceSummary.value = data.summary;
+        attendanceMonthName.value = data.month_name;
+    } catch (e) {
+        console.error(e);
+    } finally {
+        isLoadingAttendance.value = false;
+    }
+}
+
+function prevMonth() {
+    if (attendanceMonth.value === 1) {
+        attendanceMonth.value = 12;
+        attendanceYear.value--;
+    } else {
+        attendanceMonth.value--;
+    }
+    expandedDay.value = null;
+    fetchAttendance();
+}
+
+function nextMonth() {
+    const now = new Date();
+    const currentYM = now.getFullYear() * 12 + now.getMonth() + 1;
+    const targetYM = attendanceYear.value * 12 + attendanceMonth.value + 1;
+    if (targetYM > currentYM) return;
+    if (attendanceMonth.value === 12) {
+        attendanceMonth.value = 1;
+        attendanceYear.value++;
+    } else {
+        attendanceMonth.value++;
+    }
+    expandedDay.value = null;
+    fetchAttendance();
+}
+
+const isCurrentMonth = computed(() => {
+    const now = new Date();
+    return attendanceYear.value === now.getFullYear() && attendanceMonth.value === now.getMonth() + 1;
+});
+
+function toggleDayDetail(dateKey) {
+    expandedDay.value = expandedDay.value === dateKey ? null : dateKey;
+}
+
+function formatHours(h) {
+    if (!h || h === 0) return '0h 0m';
+    const hours = Math.floor(h);
+    const mins = Math.round((h - hours) * 60);
+    if (hours === 0) return `${mins}m`;
+    if (mins === 0) return `${hours}h`;
+    return `${hours}h ${mins}m`;
+}
+
 // --- Tab navigation ---
 const activeTab = ref('checker');
+
+function switchTab(tab) {
+    activeTab.value = tab;
+    if (tab === 'attendance' && attendanceDays.value.length === 0) {
+        fetchAttendance();
+    }
+}
 
 // --- Lifecycle ---
 onMounted(() => {
@@ -262,7 +338,7 @@ onUnmounted(() => {
             <!-- Tab navigation -->
             <div class="flex items-center gap-1 mb-6 border-b border-surface-800/50 pb-px">
                 <button
-                    @click="activeTab = 'checker'"
+                    @click="switchTab('checker')"
                     class="px-4 py-2.5 text-sm font-medium rounded-t-lg transition-colors relative"
                     :class="activeTab === 'checker' ? 'text-surface-100 bg-surface-800/50' : 'text-surface-400 hover:text-surface-300'"
                 >
@@ -270,13 +346,21 @@ onUnmounted(() => {
                     <div v-if="activeTab === 'checker'" class="absolute bottom-0 left-0 right-0 h-0.5 bg-brand rounded-full"></div>
                 </button>
                 <button
-                    @click="activeTab = 'proposals'"
+                    @click="switchTab('proposals')"
                     class="px-4 py-2.5 text-sm font-medium rounded-t-lg transition-colors relative"
                     :class="activeTab === 'proposals' ? 'text-surface-100 bg-surface-800/50' : 'text-surface-400 hover:text-surface-300'"
                 >
                     My Proposals
                     <span class="ml-1.5 text-xs px-1.5 py-0.5 rounded-md bg-surface-700/50 text-surface-400">{{ bidStats.total }}</span>
                     <div v-if="activeTab === 'proposals'" class="absolute bottom-0 left-0 right-0 h-0.5 bg-brand rounded-full"></div>
+                </button>
+                <button
+                    @click="switchTab('attendance')"
+                    class="px-4 py-2.5 text-sm font-medium rounded-t-lg transition-colors relative"
+                    :class="activeTab === 'attendance' ? 'text-surface-100 bg-surface-800/50' : 'text-surface-400 hover:text-surface-300'"
+                >
+                    Attendance
+                    <div v-if="activeTab === 'attendance'" class="absolute bottom-0 left-0 right-0 h-0.5 bg-brand rounded-full"></div>
                 </button>
             </div>
 
@@ -509,6 +593,159 @@ onUnmounted(() => {
                             >Next</button>
                         </div>
                     </div>
+                </div>
+            </div>
+            <!-- Tab: Attendance -->
+            <div v-show="activeTab === 'attendance'">
+                <!-- Month navigation + summary -->
+                <div class="card p-4 mb-4">
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center gap-3">
+                            <button @click="prevMonth" class="btn-ghost p-2">
+                                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
+                                </svg>
+                            </button>
+                            <h2 class="text-base font-semibold text-surface-100 min-w-[160px] text-center">
+                                {{ attendanceMonthName }} {{ attendanceYear }}
+                            </h2>
+                            <button @click="nextMonth" class="btn-ghost p-2" :class="{ 'opacity-30 pointer-events-none': isCurrentMonth }">
+                                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+                                </svg>
+                            </button>
+                        </div>
+
+                        <div class="hidden sm:flex items-center gap-5 text-xs">
+                            <div class="flex items-center gap-1.5">
+                                <span class="w-2.5 h-2.5 rounded-sm bg-brand/30"></span>
+                                <span class="text-surface-400">Present</span>
+                            </div>
+                            <div class="flex items-center gap-1.5">
+                                <span class="w-2.5 h-2.5 rounded-sm bg-red-500/40"></span>
+                                <span class="text-surface-400">Absent</span>
+                            </div>
+                            <div class="flex items-center gap-1.5">
+                                <span class="w-2.5 h-2.5 rounded-sm bg-surface-700/50"></span>
+                                <span class="text-surface-400">Weekend</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Summary stats -->
+                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4 pt-4 border-t border-surface-700/30">
+                        <div>
+                            <span class="text-xs text-surface-500">Days Present</span>
+                            <p class="text-lg font-semibold text-brand mt-0.5">{{ attendanceSummary.present_days }}</p>
+                        </div>
+                        <div>
+                            <span class="text-xs text-surface-500">Days Absent</span>
+                            <p class="text-lg font-semibold text-red-400 mt-0.5">{{ attendanceSummary.absent_days }}</p>
+                        </div>
+                        <div>
+                            <span class="text-xs text-surface-500">Total Hours</span>
+                            <p class="text-lg font-semibold text-surface-100 mt-0.5">{{ formatHours(attendanceSummary.total_worked_hours) }}</p>
+                        </div>
+                        <div>
+                            <span class="text-xs text-surface-500">Avg / Day</span>
+                            <p class="text-lg font-semibold text-surface-100 mt-0.5">{{ formatHours(attendanceSummary.avg_hours_per_day) }}</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Loading -->
+                <div v-if="isLoadingAttendance" class="card p-8 text-center">
+                    <svg class="animate-spin w-6 h-6 text-surface-500 mx-auto" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                </div>
+
+                <!-- Attendance sheet -->
+                <div v-else class="card overflow-hidden">
+                    <table class="w-full">
+                        <thead>
+                            <tr class="border-b border-surface-700/30">
+                                <th class="px-4 py-3 text-left table-header w-12">Day</th>
+                                <th class="px-4 py-3 text-left table-header">Date</th>
+                                <th class="px-4 py-3 text-left table-header">Status</th>
+                                <th class="px-4 py-3 text-left table-header">Hours Worked</th>
+                                <th class="px-4 py-3 text-left table-header hidden sm:table-cell">Sessions</th>
+                                <th class="px-4 py-3 text-right table-header w-10"></th>
+                            </tr>
+                        </thead>
+                        <tbody class="text-sm">
+                            <template v-for="day in attendanceDays" :key="day.date">
+                                <tr
+                                    class="border-b border-surface-800/20 transition-colors cursor-pointer"
+                                    :class="{
+                                        'bg-red-500/[0.04] hover:bg-red-500/[0.08]': day.status === 'absent',
+                                        'hover:bg-surface-800/20': day.status !== 'absent',
+                                        'opacity-40': day.status === 'future' || day.status === 'na',
+                                    }"
+                                    @click="day.sessions.length > 0 ? toggleDayDetail(day.date) : null"
+                                >
+                                    <td class="px-4 py-3 font-mono text-xs text-surface-500">{{ String(day.day).padStart(2, '0') }}</td>
+                                    <td class="px-4 py-3">
+                                        <span class="text-surface-200">{{ day.day_name }}</span>
+                                        <span class="text-surface-600 ml-1.5 text-xs">{{ day.date }}</span>
+                                    </td>
+                                    <td class="px-4 py-3">
+                                        <span v-if="day.status === 'present'" class="badge-success">Present</span>
+                                        <span v-else-if="day.status === 'absent'" class="badge-danger">Absent</span>
+                                        <span v-else-if="day.status === 'weekend'" class="badge-neutral">Weekend</span>
+                                        <span v-else-if="day.status === 'future'" class="text-xs text-surface-600">--</span>
+                                        <span v-else class="text-xs text-surface-600">--</span>
+                                    </td>
+                                    <td class="px-4 py-3">
+                                        <div v-if="day.status === 'present'" class="flex items-center gap-2">
+                                            <div class="flex-1 max-w-[120px] h-1.5 rounded-full bg-surface-700/50 overflow-hidden">
+                                                <div
+                                                    class="h-full rounded-full transition-all duration-300"
+                                                    :class="day.hours >= 8 ? 'bg-brand' : day.hours >= 4 ? 'bg-amber-400' : 'bg-red-400'"
+                                                    :style="{ width: Math.min(day.hours / 8 * 100, 100) + '%' }"
+                                                ></div>
+                                            </div>
+                                            <span class="font-mono text-xs font-medium" :class="day.hours >= 8 ? 'text-brand' : day.hours >= 4 ? 'text-amber-400' : 'text-red-400'">
+                                                {{ formatHours(day.hours) }}
+                                            </span>
+                                        </div>
+                                        <span v-else-if="day.status === 'absent'" class="text-xs text-red-400/60">0h</span>
+                                        <span v-else class="text-xs text-surface-600">--</span>
+                                    </td>
+                                    <td class="px-4 py-3 text-surface-500 text-xs hidden sm:table-cell">
+                                        <span v-if="day.sessions.length > 0">{{ day.sessions.length }} session{{ day.sessions.length > 1 ? 's' : '' }}</span>
+                                    </td>
+                                    <td class="px-4 py-3 text-right">
+                                        <svg v-if="day.sessions.length > 0" class="w-4 h-4 text-surface-600 inline-block transition-transform" :class="{ 'rotate-180': expandedDay === day.date }" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+                                        </svg>
+                                    </td>
+                                </tr>
+
+                                <!-- Expanded session detail -->
+                                <tr v-if="expandedDay === day.date && day.sessions.length > 0">
+                                    <td colspan="6" class="px-4 py-0">
+                                        <div class="py-3 pl-10 space-y-2 border-b border-surface-800/20">
+                                            <div v-for="(session, i) in day.sessions" :key="i" class="flex items-center gap-4 text-xs">
+                                                <span class="text-surface-500 w-4">{{ i + 1 }}.</span>
+                                                <span class="font-mono text-surface-300">
+                                                    {{ session.in || '--' }}
+                                                </span>
+                                                <svg class="w-3 h-3 text-surface-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                                                </svg>
+                                                <span class="font-mono text-surface-300">
+                                                    {{ session.out || 'Active' }}
+                                                </span>
+                                                <span class="text-surface-500 ml-auto">{{ formatHours(session.hours) }}</span>
+                                            </div>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
                 </div>
             </div>
         </main>

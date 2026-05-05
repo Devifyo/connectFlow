@@ -33,6 +33,7 @@ Route::middleware('auth')->group(function () {
     Route::post('/api/time/punch-in', [\App\Http\Controllers\TimeLogController::class, 'punchIn']);
     Route::post('/api/time/punch-out', [\App\Http\Controllers\TimeLogController::class, 'punchOut']);
     Route::get('/api/time/status', [\App\Http\Controllers\TimeLogController::class, 'status']);
+    Route::get('/api/time/attendance', [\App\Http\Controllers\TimeLogController::class, 'attendance']);
 
     // Tenant Admin Routes
     Route::middleware('role:TenantAdmin,SuperAdmin')->group(function () {
