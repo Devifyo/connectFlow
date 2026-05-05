@@ -261,6 +261,62 @@ function formatHours(h) {
     return `${hours}h ${mins}m`;
 }
 
+// --- Pipeline (Senior BDE) ---
+const isSeniorBDE = computed(() => props.auth?.user?.designation === 'Senior BDE');
+const pipelineBids = ref([]);
+const pipelineSummary = ref({ total: 0, conversion_rate: 0, status_counts: {} });
+const pipelineLoading = ref(false);
+const pipelineStatusOptions = ['Submitted', 'Interviewing', 'Hired', 'Rejected'];
+const pipelineStatusColors = {
+    Submitted: { dot: 'bg-blue-400', border: 'border-l-blue-400/50', badge: 'bg-blue-500/10 text-blue-400' },
+    Interviewing: { dot: 'bg-amber-400', border: 'border-l-amber-400/50', badge: 'bg-amber-500/10 text-amber-400' },
+    Hired: { dot: 'bg-emerald-400', border: 'border-l-emerald-400/50', badge: 'bg-emerald-500/10 text-emerald-400' },
+    Rejected: { dot: 'bg-red-400', border: 'border-l-red-400/50', badge: 'bg-red-500/10 text-red-400' },
+};
+const pipelineColumns = computed(() => {
+    const cols = {};
+    for (const s of pipelineStatusOptions) cols[s] = pipelineBids.value.filter(b => b.status === s);
+    return cols;
+});
+const pDragBidId = ref(null);
+const pDragOverStatus = ref(null);
+const pStatusMenuOpen = ref(null);
+
+async function fetchPipeline() {
+    pipelineLoading.value = true;
+    try {
+        const { data } = await axios.get('/api/pipeline/bids');
+        pipelineBids.value = data.bids;
+        pipelineSummary.value = data.summary;
+    } catch (e) {} finally { pipelineLoading.value = false; }
+}
+
+async function updatePipelineStatus(bidId, status) {
+    try {
+        await axios.put(`/api/pipeline/bids/${bidId}/status`, { status });
+        pStatusMenuOpen.value = null;
+        await fetchPipeline();
+    } catch (e) {}
+}
+
+function pOnDragStart(e, bidId) { pDragBidId.value = bidId; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', bidId); e.target.style.opacity = '0.5'; }
+function pOnDragEnd(e) { e.target.style.opacity = '1'; pDragBidId.value = null; pDragOverStatus.value = null; }
+function pOnDragOver(e, status) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; pDragOverStatus.value = status; }
+function pOnDragLeave(e, status) { if (!e.currentTarget.contains(e.relatedTarget) && pDragOverStatus.value === status) pDragOverStatus.value = null; }
+async function pOnDrop(e, targetStatus) {
+    e.preventDefault(); pDragOverStatus.value = null;
+    const bidId = parseInt(e.dataTransfer.getData('text/plain'));
+    const bid = pipelineBids.value.find(b => b.bid_id === bidId);
+    if (bid && bid.status !== targetStatus) { bid.status = targetStatus; await updatePipelineStatus(bidId, targetStatus); }
+    pDragBidId.value = null;
+}
+
+function truncateUrl(url, max = 35) {
+    if (!url) return '';
+    try { const u = new URL(url); const p = u.pathname.length > max ? u.pathname.substring(0, max) + '...' : u.pathname; return u.hostname + p; }
+    catch { return url.length > max ? url.substring(0, max) + '...' : url; }
+}
+
 // --- Tab navigation ---
 const activeTab = ref('checker');
 
@@ -268,6 +324,9 @@ function switchTab(tab) {
     activeTab.value = tab;
     if (tab === 'attendance' && attendanceDays.value.length === 0) {
         fetchAttendance();
+    }
+    if (tab === 'pipeline' && pipelineBids.value.length === 0) {
+        fetchPipeline();
     }
 }
 
@@ -371,6 +430,14 @@ onUnmounted(() => {
                 >
                     Attendance
                     <div v-if="activeTab === 'attendance'" class="absolute bottom-0 left-0 right-0 h-0.5 bg-brand rounded-full"></div>
+                </button>
+                <button v-if="isSeniorBDE"
+                    @click="switchTab('pipeline')"
+                    class="px-4 py-2.5 text-sm font-medium rounded-t-lg transition-colors relative"
+                    :class="activeTab === 'pipeline' ? 'text-surface-100 bg-surface-800/50' : 'text-surface-400 hover:text-surface-300'"
+                >
+                    Pipeline
+                    <div v-if="activeTab === 'pipeline'" class="absolute bottom-0 left-0 right-0 h-0.5 bg-brand rounded-full"></div>
                 </button>
             </div>
 
@@ -756,6 +823,95 @@ onUnmounted(() => {
                             </template>
                         </tbody>
                     </table>
+                </div>
+            </div>
+
+            <!-- Tab: Pipeline (Senior BDE only) -->
+            <div v-if="isSeniorBDE" v-show="activeTab === 'pipeline'" @click="pStatusMenuOpen = null">
+                <div v-if="pipelineLoading" class="flex items-center justify-center py-20">
+                    <div class="w-7 h-7 border-2 border-brand/30 border-t-brand rounded-full animate-spin"></div>
+                </div>
+
+                <div v-else-if="pipelineBids.length === 0" class="text-center py-16">
+                    <p class="text-surface-400 font-medium">No bids in the pipeline yet</p>
+                </div>
+
+                <div v-else>
+                    <!-- Pipeline stats -->
+                    <div class="flex items-center gap-4 mb-5">
+                        <div class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface-800/50 border border-surface-700/30">
+                            <span class="text-xs text-surface-400">Total</span>
+                            <span class="text-sm font-semibold text-surface-200">{{ pipelineSummary.total }}</span>
+                        </div>
+                        <div v-if="pipelineSummary.conversion_rate > 0" class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface-800/50 border border-surface-700/30">
+                            <span class="text-xs text-surface-400">Conversion</span>
+                            <span class="text-sm font-semibold text-brand">{{ pipelineSummary.conversion_rate }}%</span>
+                        </div>
+                    </div>
+
+                    <!-- Kanban board -->
+                    <div class="grid grid-cols-4 gap-3 min-h-[450px]">
+                        <div v-for="status in pipelineStatusOptions" :key="status"
+                            class="flex flex-col rounded-2xl bg-surface-900/50 border-2 min-w-0 transition-colors duration-200"
+                            :class="pDragOverStatus === status ? 'border-brand/50 bg-brand/5' : 'border-surface-800/40'"
+                            @dragover="pOnDragOver($event, status)"
+                            @dragleave="pOnDragLeave($event, status)"
+                            @drop="pOnDrop($event, status)">
+                            <div class="px-3 py-2.5 border-b border-surface-800/30 flex items-center justify-between">
+                                <div class="flex items-center gap-2">
+                                    <div class="w-2 h-2 rounded-full" :class="pipelineStatusColors[status]?.dot"></div>
+                                    <h3 class="text-xs font-semibold text-surface-200">{{ status }}</h3>
+                                </div>
+                                <span class="text-[10px] font-medium text-surface-500 bg-surface-800/50 px-1.5 py-0.5 rounded">
+                                    {{ pipelineColumns[status]?.length || 0 }}
+                                </span>
+                            </div>
+                            <div class="flex-1 p-2.5 space-y-2 overflow-y-auto scrollbar-thin">
+                                <div v-for="bid in pipelineColumns[status]" :key="bid.bid_id"
+                                    draggable="true"
+                                    @dragstart="pOnDragStart($event, bid.bid_id)"
+                                    @dragend="pOnDragEnd"
+                                    class="card card-hover p-3 border-l-2 overflow-hidden cursor-grab active:cursor-grabbing select-none"
+                                    :class="[pipelineStatusColors[status]?.border, pDragBidId === bid.bid_id ? 'opacity-50 scale-95' : '']">
+                                    <p class="text-xs font-medium text-surface-200 mb-1 truncate">
+                                        {{ bid.job_title || truncateUrl(bid.job_url) }}
+                                    </p>
+                                    <div class="flex items-center gap-1.5 mb-2">
+                                        <span class="text-[10px] text-surface-500">{{ bid.platform_name }}</span>
+                                        <span class="text-surface-700">&middot;</span>
+                                        <span class="text-[10px] text-surface-500">{{ bid.connects_used }}c</span>
+                                    </div>
+                                    <div class="flex items-center justify-between">
+                                        <div v-if="bid.user" class="flex items-center gap-1.5">
+                                            <div class="w-4 h-4 rounded-full bg-surface-700 flex items-center justify-center text-[8px] font-bold text-surface-400">
+                                                {{ bid.user.name.charAt(0).toUpperCase() }}
+                                            </div>
+                                            <span class="text-[10px] text-surface-500">{{ bid.user.name.split(' ')[0] }}</span>
+                                        </div>
+                                        <div class="relative" @click.stop>
+                                            <button @click="pStatusMenuOpen = pStatusMenuOpen === bid.bid_id ? null : bid.bid_id"
+                                                class="text-[10px] font-medium px-1.5 py-0.5 rounded cursor-pointer"
+                                                :class="pipelineStatusColors[status]?.badge">
+                                                {{ status }}
+                                            </button>
+                                            <div v-if="pStatusMenuOpen === bid.bid_id"
+                                                class="absolute right-0 bottom-full mb-1 w-28 bg-surface-800 border border-surface-700/50 rounded-lg shadow-xl z-20 py-1">
+                                                <button v-for="s in pipelineStatusOptions.filter(x => x !== status)" :key="s"
+                                                    @click="updatePipelineStatus(bid.bid_id, s)"
+                                                    class="w-full text-left px-2.5 py-1 text-[11px] text-surface-300 hover:bg-surface-700/50 transition-colors flex items-center gap-1.5">
+                                                    <div class="w-1.5 h-1.5 rounded-full" :class="pipelineStatusColors[s]?.dot"></div>
+                                                    {{ s }}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div v-if="!pipelineColumns[status]?.length" class="flex items-center justify-center h-24 text-[11px] text-surface-600">
+                                    No bids
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </main>

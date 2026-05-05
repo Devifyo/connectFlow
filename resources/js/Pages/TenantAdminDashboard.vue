@@ -126,6 +126,48 @@ function truncateUrl(url, max = 40) {
     }
 }
 
+// --- Add Member ---
+const showAddMember = ref(false);
+const addMemberForm = ref({ name: '', email: '', password: '', designation: 'BDE Bidder' });
+const addMemberError = ref('');
+const addMemberLoading = ref(false);
+const designations = ['Intern BDE', 'BDE Bidder', 'Senior BDE'];
+
+const designationBadge = {
+    'Intern BDE': 'bg-sky-500/10 text-sky-400',
+    'BDE Bidder': 'bg-violet-500/10 text-violet-400',
+    'Senior BDE': 'bg-amber-500/10 text-amber-400',
+};
+
+async function addMember() {
+    addMemberError.value = '';
+    addMemberLoading.value = true;
+    try {
+        await axios.post('/api/admin/bidders', addMemberForm.value);
+        showAddMember.value = false;
+        addMemberForm.value = { name: '', email: '', password: '', designation: 'BDE Bidder' };
+        await fetchTeamData();
+    } catch (e) {
+        addMemberError.value = e.response?.data?.message || 'Failed to add member.';
+    } finally {
+        addMemberLoading.value = false;
+    }
+}
+
+async function updateMemberDesignation(id, designation) {
+    try {
+        await axios.put(`/api/admin/bidders/${id}`, { designation });
+        await fetchTeamData();
+    } catch (e) {}
+}
+
+async function toggleMemberActive(id, isActive) {
+    try {
+        await axios.put(`/api/admin/bidders/${id}`, { is_active: !isActive });
+        await fetchTeamData();
+    } catch (e) {}
+}
+
 onMounted(async () => {
     ready.value = true;
     await Promise.all([fetchPipelineData(), fetchTeamData()]);
@@ -345,14 +387,75 @@ onMounted(async () => {
                     </div>
                 </div>
 
+                <!-- Add Member Form -->
+                <div v-if="showAddMember" class="card p-6 mb-6 animate-fade-in">
+                    <div class="flex items-center justify-between mb-5">
+                        <h3 class="font-semibold text-surface-100">Add Team Member</h3>
+                        <button @click="showAddMember = false" class="text-surface-500 hover:text-surface-300 transition-colors">
+                            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                        </button>
+                    </div>
+                    <div v-if="addMemberError" class="mb-4 px-4 py-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-sm text-red-400">
+                        {{ addMemberError }}
+                    </div>
+                    <form @submit.prevent="addMember" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+                        <div>
+                            <label class="block text-xs font-medium text-surface-400 mb-1.5">Full Name</label>
+                            <input v-model="addMemberForm.name" type="text" required placeholder="John Doe"
+                                class="input-field w-full" />
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-surface-400 mb-1.5">Email</label>
+                            <input v-model="addMemberForm.email" type="email" required placeholder="john@company.com"
+                                class="input-field w-full" />
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-surface-400 mb-1.5">Password</label>
+                            <input v-model="addMemberForm.password" type="password" required minlength="6" placeholder="Min 6 chars"
+                                class="input-field w-full" />
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-surface-400 mb-1.5">Designation</label>
+                            <select v-model="addMemberForm.designation"
+                                class="input-field w-full appearance-none cursor-pointer">
+                                <option v-for="d in designations" :key="d" :value="d">{{ d }}</option>
+                            </select>
+                        </div>
+                        <div class="flex items-end">
+                            <button type="submit" :disabled="addMemberLoading"
+                                class="btn-primary w-full py-2.5 text-sm justify-center">
+                                <span v-if="addMemberLoading" class="flex items-center gap-2">
+                                    <div class="w-3.5 h-3.5 border-2 border-surface-950/30 border-t-surface-950 rounded-full animate-spin"></div>
+                                    Adding...
+                                </span>
+                                <span v-else>Add Member</span>
+                            </button>
+                        </div>
+                    </form>
+                </div>
+
                 <!-- Bidders table -->
                 <div class="card overflow-hidden">
-                    <div class="px-6 py-4 border-b border-surface-700/30">
+                    <div class="px-6 py-4 border-b border-surface-700/30 flex items-center justify-between">
                         <h2 class="font-semibold text-surface-100">Team Members</h2>
+                        <button v-if="!showAddMember" @click="showAddMember = true" class="btn-primary text-xs px-4 py-2">
+                            <svg class="w-3.5 h-3.5 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                            </svg>
+                            Add Member
+                        </button>
                     </div>
 
                     <div v-if="bidders.length === 0" class="px-6 py-12 text-center">
-                        <p class="text-surface-400">No bidders in your team yet</p>
+                        <div class="w-16 h-16 mx-auto mb-4 rounded-2xl bg-surface-800/50 flex items-center justify-center">
+                            <svg class="w-8 h-8 text-surface-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z" />
+                            </svg>
+                        </div>
+                        <p class="text-surface-300 font-medium">No team members yet</p>
+                        <p class="text-sm text-surface-500 mt-1">Click "Add Member" to invite your first bidder</p>
                     </div>
 
                     <div v-else class="overflow-x-auto">
@@ -360,17 +463,19 @@ onMounted(async () => {
                             <thead>
                                 <tr class="border-b border-surface-700/30">
                                     <th class="px-6 py-3 text-left table-header">Bidder</th>
+                                    <th class="px-6 py-3 text-left table-header">Designation</th>
                                     <th class="px-6 py-3 text-left table-header">Status</th>
-                                    <th class="px-6 py-3 text-center table-header">Today's Bids</th>
-                                    <th class="px-6 py-3 text-center table-header">This Week</th>
-                                    <th class="px-6 py-3 text-center table-header">Total Bids</th>
-                                    <th class="px-6 py-3 text-center table-header">Hours Today</th>
-                                    <th class="px-6 py-3 text-left table-header">Joined</th>
+                                    <th class="px-6 py-3 text-center table-header">Today</th>
+                                    <th class="px-6 py-3 text-center table-header">Week</th>
+                                    <th class="px-6 py-3 text-center table-header">Total</th>
+                                    <th class="px-6 py-3 text-center table-header">Hours</th>
+                                    <th class="px-6 py-3 text-right table-header">Actions</th>
                                 </tr>
                             </thead>
                             <tbody class="text-sm">
                                 <tr v-for="bidder in bidders" :key="bidder.id"
-                                    class="border-b border-surface-800/30 hover:bg-surface-800/20 transition-colors">
+                                    class="border-b border-surface-800/30 hover:bg-surface-800/20 transition-colors"
+                                    :class="{ 'opacity-50': !bidder.is_active }">
                                     <td class="px-6 py-4">
                                         <div class="flex items-center gap-3">
                                             <div class="relative">
@@ -387,14 +492,32 @@ onMounted(async () => {
                                         </div>
                                     </td>
                                     <td class="px-6 py-4">
-                                        <span v-if="bidder.is_online" class="badge-success">Online</span>
+                                        <select :value="bidder.designation || ''"
+                                            @change="updateMemberDesignation(bidder.id, $event.target.value)"
+                                            class="text-xs font-medium px-2 py-1 rounded-md border-0 cursor-pointer appearance-none"
+                                            :class="designationBadge[bidder.designation] || 'bg-surface-700/50 text-surface-400'"
+                                            style="background-image: none;">
+                                            <option value="" disabled>Set role</option>
+                                            <option v-for="d in designations" :key="d" :value="d"
+                                                class="bg-surface-800 text-surface-200">{{ d }}</option>
+                                        </select>
+                                    </td>
+                                    <td class="px-6 py-4">
+                                        <span v-if="!bidder.is_active" class="badge-danger">Disabled</span>
+                                        <span v-else-if="bidder.is_online" class="badge-success">Online</span>
                                         <span v-else class="badge-neutral">Offline</span>
                                     </td>
                                     <td class="px-6 py-4 text-center font-mono text-surface-300">{{ bidder.bids_today }}</td>
                                     <td class="px-6 py-4 text-center font-mono text-surface-300">{{ bidder.bids_this_week }}</td>
                                     <td class="px-6 py-4 text-center font-mono text-surface-300">{{ bidder.total_bids }}</td>
                                     <td class="px-6 py-4 text-center font-mono text-surface-300">{{ bidder.today_hours }}h</td>
-                                    <td class="px-6 py-4 text-surface-500 text-xs">{{ toLocalDate(bidder.joined) }}</td>
+                                    <td class="px-6 py-4 text-right">
+                                        <button @click="toggleMemberActive(bidder.id, bidder.is_active)"
+                                            :class="bidder.is_active ? 'text-red-400 hover:text-red-300' : 'text-emerald-400 hover:text-emerald-300'"
+                                            class="btn-ghost text-xs">
+                                            {{ bidder.is_active ? 'Disable' : 'Enable' }}
+                                        </button>
+                                    </td>
                                 </tr>
                             </tbody>
                         </table>

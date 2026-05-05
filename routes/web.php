@@ -38,8 +38,16 @@ Route::middleware('auth')->group(function () {
     // Tenant Admin Routes
     Route::middleware('role:TenantAdmin|SuperAdmin')->group(function () {
         Route::get('/api/admin/bidders', [\App\Http\Controllers\TenantAdminController::class, 'bidders']);
+        Route::post('/api/admin/bidders', [\App\Http\Controllers\TenantAdminController::class, 'addMember']);
+        Route::put('/api/admin/bidders/{id}', [\App\Http\Controllers\TenantAdminController::class, 'updateMember']);
         Route::get('/api/admin/reports/efficiency', [\App\Http\Controllers\TenantAdminController::class, 'efficiency']);
         Route::put('/api/admin/bids/{id}/status', [\App\Http\Controllers\TenantAdminController::class, 'updateBidStatus']);
+    });
+
+    // Pipeline access (TenantAdmin, SuperAdmin, Senior BDE)
+    Route::middleware('can:manage-pipeline')->group(function () {
+        Route::get('/api/pipeline/bids', [\App\Http\Controllers\TenantAdminController::class, 'efficiency']);
+        Route::put('/api/pipeline/bids/{id}/status', [\App\Http\Controllers\TenantAdminController::class, 'updateBidStatus']);
     });
 
     // Super Admin Routes

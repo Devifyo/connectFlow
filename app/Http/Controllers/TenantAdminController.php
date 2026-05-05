@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Hash;
 use App\Models\User;
 use App\Models\Bid;
 use App\Models\TimeLog;
@@ -45,6 +46,7 @@ class TenantAdminController extends Controller
                     'id' => $bidder->id,
                     'name' => $bidder->name,
                     'email' => $bidder->email,
+                    'designation' => $bidder->designation,
                     'is_active' => $bidder->is_active,
                     'total_bids' => $bidder->bids_count,
                     'bids_today' => $bidsToday,
@@ -57,6 +59,56 @@ class TenantAdminController extends Controller
             });
 
         return response()->json(['bidders' => $bidders]);
+    }
+
+    public function addMember(Request $request)
+    {
+        $request->validate([
+            'name' => 'required|string|max:255',
+            'email' => 'required|email|unique:users,email',
+            'password' => 'required|string|min:6',
+            'designation' => 'required|in:Intern BDE,BDE Bidder,Senior BDE',
+        ]);
+
+        $user = User::create([
+            'name' => $request->name,
+            'email' => $request->email,
+            'password' => Hash::make($request->password),
+            'tenant_id' => auth()->user()->tenant_id,
+            'is_active' => true,
+            'designation' => $request->designation,
+        ]);
+        $user->assignRole('Bidder');
+
+        return response()->json([
+            'status' => 'success',
+            'member' => [
+                'id' => $user->id,
+                'name' => $user->name,
+                'email' => $user->email,
+                'designation' => $user->designation,
+            ],
+        ]);
+    }
+
+    public function updateMember(Request $request, $id)
+    {
+        $request->validate([
+            'designation' => 'sometimes|in:Intern BDE,BDE Bidder,Senior BDE',
+            'is_active' => 'sometimes|boolean',
+        ]);
+
+        $user = User::findOrFail($id);
+
+        if ($request->has('designation')) {
+            $user->designation = $request->designation;
+        }
+        if ($request->has('is_active')) {
+            $user->is_active = $request->is_active;
+        }
+        $user->save();
+
+        return response()->json(['status' => 'success']);
     }
 
     public function efficiency()
