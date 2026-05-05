@@ -214,7 +214,7 @@ onMounted(async () => {
                 </div>
 
                 <div v-else class="grid grid-cols-4 gap-4 h-full min-h-[500px]">
-                    <div v-for="status in statusOptions" :key="status" class="flex flex-col rounded-2xl bg-surface-900/50 border border-surface-800/40">
+                    <div v-for="status in statusOptions" :key="status" class="flex flex-col rounded-2xl bg-surface-900/50 border border-surface-800/40 min-w-0">
                         <div class="px-4 py-3 border-b border-surface-800/30 flex items-center justify-between">
                             <div class="flex items-center gap-2">
                                 <div class="w-2 h-2 rounded-full" :class="statusColors[status]?.dot"></div>
@@ -227,9 +227,9 @@ onMounted(async () => {
 
                         <div class="flex-1 p-3 space-y-2.5 overflow-y-auto scrollbar-thin">
                             <div v-for="bid in pipelineColumns[status]" :key="bid.bid_id"
-                                class="card card-hover p-4 border-l-2 relative"
+                                class="card card-hover p-4 border-l-2 relative overflow-hidden"
                                 :class="statusColors[status]?.border">
-                                <p class="text-sm font-medium text-surface-200 mb-1.5 leading-snug">
+                                <p class="text-sm font-medium text-surface-200 mb-1.5 leading-snug truncate">
                                     {{ bid.job_title || truncateUrl(bid.job_url) }}
                                 </p>
                                 <div class="flex items-center gap-2 mb-3">
