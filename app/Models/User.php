@@ -36,4 +36,14 @@ class User extends Authenticatable
     {
         static::addGlobalScope(new \App\Models\Scopes\TenantScope);
     }
+
+    public function bids()
+    {
+        return $this->hasMany(Bid::class);
+    }
+
+    public function timeLogs()
+    {
+        return $this->hasMany(TimeLog::class);
+    }
 }

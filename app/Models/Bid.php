@@ -13,4 +13,9 @@ class Bid extends Model
     {
         static::addGlobalScope(new \App\Models\Scopes\TenantScope);
     }
+
+    public function user()
+    {
+        return $this->belongsTo(User::class);
+    }
 }
