@@ -36,7 +36,7 @@ Route::middleware('auth')->group(function () {
     Route::get('/api/time/attendance', [\App\Http\Controllers\TimeLogController::class, 'attendance']);
 
     // Tenant Admin Routes
-    Route::middleware('role:TenantAdmin,SuperAdmin')->group(function () {
+    Route::middleware('role:TenantAdmin|SuperAdmin')->group(function () {
         Route::get('/api/admin/bidders', [\App\Http\Controllers\TenantAdminController::class, 'bidders']);
         Route::get('/api/admin/reports/efficiency', [\App\Http\Controllers\TenantAdminController::class, 'efficiency']);
         Route::put('/api/admin/bids/{id}/status', [\App\Http\Controllers\TenantAdminController::class, 'updateBidStatus']);
