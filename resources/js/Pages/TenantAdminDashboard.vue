@@ -552,7 +552,7 @@ onMounted(async () => {
                                         <label class="block text-xs font-medium text-surface-400 mb-1.5">Salary (₹/month) *</label>
                                         <div class="relative">
                                             <span class="absolute left-3 top-1/2 -translate-y-1/2 text-surface-500 text-sm">₹</span>
-                                            <input v-model="addMemberForm.salary" type="number" min="1" step="100" placeholder="25000"
+                                            <input v-model="addMemberForm.salary" type="number" min="1" step="any" placeholder="25000"
                                                 class="input-field w-full pl-7" :class="{ 'border-red-500/50': addMemberErrors.salary }" />
                                         </div>
                                         <p v-if="addMemberErrors.salary" class="text-[11px] text-red-400 mt-1">{{ addMemberErrors.salary }}</p>
@@ -620,7 +620,7 @@ onMounted(async () => {
                                         <label class="block text-xs font-medium text-surface-400 mb-1.5">Salary (₹/month)</label>
                                         <div class="relative">
                                             <span class="absolute left-3 top-1/2 -translate-y-1/2 text-surface-500 text-sm">₹</span>
-                                            <input v-model="editForm.salary" type="number" min="1" step="100"
+                                            <input v-model="editForm.salary" type="number" min="1" step="any"
                                                 class="input-field w-full pl-7" :class="{ 'border-red-500/50': editErrors.salary }" />
                                         </div>
                                         <p v-if="editErrors.salary" class="text-[11px] text-red-400 mt-1">{{ editErrors.salary }}</p>
