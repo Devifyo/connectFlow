@@ -18,18 +18,19 @@ class TimeLogController extends Controller
             return response()->json(['error' => 'Already punched in.'], 400);
         }
 
+        $now = Carbon::now('UTC');
+
         $log = TimeLog::create([
             'tenant_id' => auth()->user()->tenant_id,
             'user_id' => auth()->id(),
-            'login_time' => now(),
-            'date' => today()
+            'login_time' => $now,
+            'date' => $now->toDateString(),
         ]);
 
         return response()->json([
             'status' => 'success',
             'message' => 'Punched in.',
-            'log' => $log,
-            'punched_in_at' => $log->login_time,
+            'punched_in_at' => $log->login_time->toIso8601String(),
         ]);
     }
 
@@ -44,15 +45,19 @@ class TimeLogController extends Controller
             return response()->json(['error' => 'No active shift found.'], 400);
         }
 
-        $logoutTime = now();
-        $totalHours = $logoutTime->diffInMinutes($log->login_time) / 60;
+        $now = Carbon::now('UTC');
+        $totalHours = $now->floatDiffInHours($log->login_time);
 
         $log->update([
-            'logout_time' => $logoutTime,
-            'total_hours' => round($totalHours, 2)
+            'logout_time' => $now,
+            'total_hours' => round($totalHours, 4),
         ]);
 
-        return response()->json(['status' => 'success', 'message' => 'Punched out.', 'log' => $log]);
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Punched out.',
+            'total_hours' => round($totalHours, 2),
+        ]);
     }
 
     public function status()
@@ -62,19 +67,24 @@ class TimeLogController extends Controller
             ->latest('login_time')
             ->first();
 
+        $now = Carbon::now('UTC');
+
         $todayLogs = TimeLog::where('user_id', auth()->id())
-            ->where('date', today())
+            ->where('date', $now->toDateString())
             ->get();
 
-        $todayHours = $todayLogs->sum('total_hours');
-
-        if ($activeShift) {
-            $todayHours += now()->diffInMinutes($activeShift->login_time) / 60;
+        $todayHours = 0.0;
+        foreach ($todayLogs as $log) {
+            if ($log->logout_time) {
+                $todayHours += (float) $log->total_hours;
+            } else {
+                $todayHours += $now->floatDiffInHours($log->login_time);
+            }
         }
 
         return response()->json([
             'is_punched_in' => (bool) $activeShift,
-            'punched_in_at' => $activeShift?->login_time,
+            'punched_in_at' => $activeShift?->login_time?->toIso8601String(),
             'today_hours' => round($todayHours, 2),
             'today_sessions' => $todayLogs->count(),
         ]);
@@ -90,52 +100,54 @@ class TimeLogController extends Controller
         $year = (int) ($request->year ?? now()->year);
         $month = (int) ($request->month ?? now()->month);
 
-        $startOfMonth = Carbon::create($year, $month, 1)->startOfDay();
-        $endOfMonth = $startOfMonth->copy()->endOfMonth();
-        $today = now()->startOfDay();
+        $startOfMonth = Carbon::createFromDate($year, $month, 1, 'UTC')->startOfDay();
+        $endOfMonth = $startOfMonth->copy()->endOfMonth()->endOfDay();
+        $today = Carbon::now('UTC')->startOfDay();
 
         $logs = TimeLog::where('user_id', auth()->id())
-            ->whereBetween('date', [$startOfMonth->toDateString(), $endOfMonth->toDateString()])
+            ->whereBetween('date', [$startOfMonth->toDateString(), $startOfMonth->copy()->endOfMonth()->toDateString()])
             ->orderBy('login_time')
             ->get();
 
-        $grouped = $logs->groupBy(fn ($log) => Carbon::parse($log->date)->format('Y-m-d'));
+        $grouped = $logs->groupBy(fn ($log) => $log->date->format('Y-m-d'));
 
         $userCreatedAt = Carbon::parse(auth()->user()->created_at)->startOfDay();
 
         $days = [];
-        $totalWorkedHours = 0;
+        $totalWorkedHours = 0.0;
         $presentDays = 0;
         $absentDays = 0;
 
-        for ($d = $startOfMonth->copy(); $d->lte($endOfMonth); $d->addDay()) {
+        for ($d = $startOfMonth->copy(); $d->lte($startOfMonth->copy()->endOfMonth()); $d->addDay()) {
             $dateKey = $d->format('Y-m-d');
-            $dayOfWeek = $d->dayOfWeek; // 0=Sun, 6=Sat
-            $isWeekend = in_array($dayOfWeek, [0, 6]);
+            $isWeekend = in_array($d->dayOfWeek, [0, 6]);
             $isFuture = $d->gt($today);
             $isBeforeJoin = $d->lt($userCreatedAt);
 
             $dayLogs = $grouped->get($dateKey, collect());
-            $dayHours = $dayLogs->sum('total_hours');
+            $dayHours = 0.0;
 
-            $activeOnThisDay = null;
-            if ($d->eq($today)) {
-                $active = TimeLog::where('user_id', auth()->id())
-                    ->whereNull('logout_time')
-                    ->where('date', $dateKey)
-                    ->first();
-                if ($active) {
-                    $dayHours += now()->diffInMinutes($active->login_time) / 60;
+            foreach ($dayLogs as $log) {
+                if ($log->logout_time) {
+                    $dayHours += (float) $log->total_hours;
+                } elseif ($d->eq($today)) {
+                    $dayHours += Carbon::now('UTC')->floatDiffInHours($log->login_time);
                 }
             }
 
             $dayHours = round($dayHours, 2);
 
-            $sessions = $dayLogs->map(fn ($l) => [
-                'in' => $l->login_time ? Carbon::parse($l->login_time)->format('h:i A') : null,
-                'out' => $l->logout_time ? Carbon::parse($l->logout_time)->format('h:i A') : null,
-                'hours' => round($l->total_hours, 2),
-            ])->values();
+            $sessions = $dayLogs->map(function ($l) {
+                $hours = (float) $l->total_hours;
+                if (!$l->logout_time) {
+                    $hours = round(Carbon::now('UTC')->floatDiffInHours($l->login_time), 4);
+                }
+                return [
+                    'in' => $l->login_time?->toIso8601String(),
+                    'out' => $l->logout_time?->toIso8601String(),
+                    'hours' => round($hours, 2),
+                ];
+            })->values();
 
             $status = 'future';
             if ($isBeforeJoin) {

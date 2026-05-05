@@ -22,8 +22,10 @@ const formattedElapsed = computed(() => {
 function startClock(startTime) {
     stopClock();
     const start = new Date(startTime);
+    if (isNaN(start.getTime())) return;
     const tick = () => {
-        elapsedSeconds.value = Math.floor((Date.now() - start.getTime()) / 1000);
+        const diff = Math.floor((Date.now() - start.getTime()) / 1000);
+        elapsedSeconds.value = Math.max(0, diff);
     };
     tick();
     clockInterval = setInterval(tick, 1000);
@@ -174,12 +176,19 @@ function applyCustomRange() {
 
 function formatDate(dateStr) {
     const d = new Date(dateStr);
-    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 function formatTime(dateStr) {
+    if (!dateStr) return '--';
     const d = new Date(dateStr);
-    return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+}
+
+function toLocalTimeShort(isoStr) {
+    if (!isoStr) return null;
+    const d = new Date(isoStr);
+    return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: true });
 }
 
 // --- Attendance ---
@@ -730,13 +739,13 @@ onUnmounted(() => {
                                             <div v-for="(session, i) in day.sessions" :key="i" class="flex items-center gap-4 text-xs">
                                                 <span class="text-surface-500 w-4">{{ i + 1 }}.</span>
                                                 <span class="font-mono text-surface-300">
-                                                    {{ session.in || '--' }}
+                                                    {{ toLocalTimeShort(session.in) || '--' }}
                                                 </span>
                                                 <svg class="w-3 h-3 text-surface-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                                                     <path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
                                                 </svg>
-                                                <span class="font-mono text-surface-300">
-                                                    {{ session.out || 'Active' }}
+                                                <span class="font-mono" :class="session.out ? 'text-surface-300' : 'text-emerald-400'">
+                                                    {{ session.out ? toLocalTimeShort(session.out) : 'Active now' }}
                                                 </span>
                                                 <span class="text-surface-500 ml-auto">{{ formatHours(session.hours) }}</span>
                                             </div>
