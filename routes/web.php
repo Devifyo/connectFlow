@@ -29,8 +29,10 @@ Route::middleware('auth')->group(function () {
     // Bidder Routes
     Route::post('/api/bids/check', [\App\Http\Controllers\BidController::class, 'checkCollision']);
     Route::post('/api/bids/submit', [\App\Http\Controllers\BidController::class, 'submit']);
+    Route::get('/api/bids/mine', [\App\Http\Controllers\BidController::class, 'myBids']);
     Route::post('/api/time/punch-in', [\App\Http\Controllers\TimeLogController::class, 'punchIn']);
     Route::post('/api/time/punch-out', [\App\Http\Controllers\TimeLogController::class, 'punchOut']);
+    Route::get('/api/time/status', [\App\Http\Controllers\TimeLogController::class, 'status']);
 
     // Tenant Admin Routes
     Route::middleware('role:TenantAdmin,SuperAdmin')->group(function () {
