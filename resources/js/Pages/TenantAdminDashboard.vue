@@ -57,6 +57,46 @@ function toggleStatusMenu(bidId) {
     statusMenuOpen.value = statusMenuOpen.value === bidId ? null : bidId;
 }
 
+const dragBidId = ref(null);
+const dragOverStatus = ref(null);
+
+function onDragStart(e, bidId) {
+    dragBidId.value = bidId;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', bidId);
+    e.target.style.opacity = '0.5';
+}
+
+function onDragEnd(e) {
+    e.target.style.opacity = '1';
+    dragBidId.value = null;
+    dragOverStatus.value = null;
+}
+
+function onDragOver(e, status) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    dragOverStatus.value = status;
+}
+
+function onDragLeave(e, status) {
+    if (!e.currentTarget.contains(e.relatedTarget)) {
+        if (dragOverStatus.value === status) dragOverStatus.value = null;
+    }
+}
+
+async function onDrop(e, targetStatus) {
+    e.preventDefault();
+    dragOverStatus.value = null;
+    const bidId = parseInt(e.dataTransfer.getData('text/plain'));
+    const bid = bids.value.find(b => b.bid_id === bidId);
+    if (bid && bid.status !== targetStatus) {
+        bid.status = targetStatus;
+        await updateBidStatus(bidId, targetStatus);
+    }
+    dragBidId.value = null;
+}
+
 const pipelineColumns = computed(() => {
     const cols = {};
     for (const s of statusOptions) {
@@ -214,7 +254,12 @@ onMounted(async () => {
                 </div>
 
                 <div v-else class="grid grid-cols-4 gap-4 h-full min-h-[500px]">
-                    <div v-for="status in statusOptions" :key="status" class="flex flex-col rounded-2xl bg-surface-900/50 border border-surface-800/40 min-w-0">
+                    <div v-for="status in statusOptions" :key="status"
+                        class="flex flex-col rounded-2xl bg-surface-900/50 border-2 min-w-0 transition-colors duration-200"
+                        :class="dragOverStatus === status ? 'border-brand/50 bg-brand/5' : 'border-surface-800/40'"
+                        @dragover="onDragOver($event, status)"
+                        @dragleave="onDragLeave($event, status)"
+                        @drop="onDrop($event, status)">
                         <div class="px-4 py-3 border-b border-surface-800/30 flex items-center justify-between">
                             <div class="flex items-center gap-2">
                                 <div class="w-2 h-2 rounded-full" :class="statusColors[status]?.dot"></div>
@@ -227,8 +272,11 @@ onMounted(async () => {
 
                         <div class="flex-1 p-3 space-y-2.5 overflow-y-auto scrollbar-thin">
                             <div v-for="bid in pipelineColumns[status]" :key="bid.bid_id"
-                                class="card card-hover p-4 border-l-2 relative overflow-hidden"
-                                :class="statusColors[status]?.border">
+                                draggable="true"
+                                @dragstart="onDragStart($event, bid.bid_id)"
+                                @dragend="onDragEnd"
+                                class="card card-hover p-4 border-l-2 relative overflow-hidden cursor-grab active:cursor-grabbing select-none"
+                                :class="[statusColors[status]?.border, dragBidId === bid.bid_id ? 'opacity-50 scale-95' : '']">
                                 <p class="text-sm font-medium text-surface-200 mb-1.5 leading-snug truncate">
                                     {{ bid.job_title || truncateUrl(bid.job_url) }}
                                 </p>
