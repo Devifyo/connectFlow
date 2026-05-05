@@ -76,9 +76,9 @@ class TimeLogController extends Controller
         $todayHours = 0.0;
         foreach ($todayLogs as $log) {
             if ($log->logout_time) {
-                $todayHours += (float) $log->total_hours;
+                $todayHours += abs((float) $log->total_hours);
             } else {
-                $todayHours += $now->floatDiffInHours($log->login_time);
+                $todayHours += abs($now->floatDiffInHours($log->login_time));
             }
         }
 
@@ -129,7 +129,7 @@ class TimeLogController extends Controller
 
             foreach ($dayLogs as $log) {
                 if ($log->logout_time) {
-                    $dayHours += (float) $log->total_hours;
+                    $dayHours += abs((float) $log->total_hours);
                 } elseif ($d->eq($today)) {
                     $dayHours += abs(Carbon::now('UTC')->floatDiffInHours($log->login_time));
                 }
@@ -138,9 +138,9 @@ class TimeLogController extends Controller
             $dayHours = round($dayHours, 2);
 
             $sessions = $dayLogs->map(function ($l) {
-                $hours = (float) $l->total_hours;
+                $hours = abs((float) $l->total_hours);
                 if (!$l->logout_time) {
-                    $hours = round(Carbon::now('UTC')->floatDiffInHours($l->login_time), 4);
+                    $hours = abs(round(Carbon::now('UTC')->floatDiffInHours($l->login_time), 4));
                 }
                 return [
                     'in' => $l->login_time?->toIso8601String(),
