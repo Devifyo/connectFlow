@@ -128,7 +128,12 @@ function truncateUrl(url, max = 40) {
 
 // --- Add Member ---
 const showAddMember = ref(false);
-const addMemberForm = ref({ name: '', email: '', password: '', designation: 'BDE Bidder' });
+const addMemberForm = ref({
+    name: '', email: '', password: '', designation: 'BDE Bidder',
+    joining_date: new Date().toISOString().split('T')[0],
+    salary: '', min_hours_per_day: '8',
+});
+const addMemberErrors = ref({});
 const addMemberError = ref('');
 const addMemberLoading = ref(false);
 const designations = ['Intern BDE', 'BDE Bidder', 'Senior BDE'];
@@ -139,16 +144,52 @@ const designationBadge = {
     'Senior BDE': 'bg-amber-500/10 text-amber-400',
 };
 
+function resetMemberForm() {
+    addMemberForm.value = {
+        name: '', email: '', password: '', designation: 'BDE Bidder',
+        joining_date: new Date().toISOString().split('T')[0],
+        salary: '', min_hours_per_day: '8',
+    };
+    addMemberErrors.value = {};
+    addMemberError.value = '';
+}
+
+function validateMemberForm() {
+    const errors = {};
+    const f = addMemberForm.value;
+    if (!f.name.trim()) errors.name = 'Name is required';
+    if (!f.email.trim()) errors.email = 'Email is required';
+    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email)) errors.email = 'Invalid email format';
+    if (!f.password || f.password.length < 6) errors.password = 'Minimum 6 characters';
+    if (!f.joining_date) errors.joining_date = 'Joining date is required';
+    if (!f.salary || parseFloat(f.salary) <= 0) errors.salary = 'Salary must be greater than 0';
+    if (!f.min_hours_per_day || parseFloat(f.min_hours_per_day) < 1 || parseFloat(f.min_hours_per_day) > 24) errors.min_hours_per_day = 'Must be between 1-24 hours';
+    addMemberErrors.value = errors;
+    return Object.keys(errors).length === 0;
+}
+
 async function addMember() {
+    if (!validateMemberForm()) return;
     addMemberError.value = '';
     addMemberLoading.value = true;
     try {
-        await axios.post('/api/admin/bidders', addMemberForm.value);
+        await axios.post('/api/admin/bidders', {
+            ...addMemberForm.value,
+            salary: parseFloat(addMemberForm.value.salary),
+            min_hours_per_day: parseFloat(addMemberForm.value.min_hours_per_day),
+        });
         showAddMember.value = false;
-        addMemberForm.value = { name: '', email: '', password: '', designation: 'BDE Bidder' };
+        resetMemberForm();
         await fetchTeamData();
     } catch (e) {
-        addMemberError.value = e.response?.data?.message || 'Failed to add member.';
+        if (e.response?.data?.errors) {
+            const serverErrors = e.response.data.errors;
+            for (const key in serverErrors) {
+                addMemberErrors.value[key] = serverErrors[key][0];
+            }
+        } else {
+            addMemberError.value = e.response?.data?.message || 'Failed to add member.';
+        }
     } finally {
         addMemberLoading.value = false;
     }
@@ -166,6 +207,11 @@ async function toggleMemberActive(id, isActive) {
         await axios.put(`/api/admin/bidders/${id}`, { is_active: !isActive });
         await fetchTeamData();
     } catch (e) {}
+}
+
+function formatSalary(amount) {
+    if (!amount) return '-';
+    return '₹' + Number(amount).toLocaleString('en-IN');
 }
 
 onMounted(async () => {
@@ -387,54 +433,114 @@ onMounted(async () => {
                     </div>
                 </div>
 
-                <!-- Add Member Form -->
-                <div v-if="showAddMember" class="card p-6 mb-6 animate-fade-in">
-                    <div class="flex items-center justify-between mb-5">
-                        <h3 class="font-semibold text-surface-100">Add Team Member</h3>
-                        <button @click="showAddMember = false" class="text-surface-500 hover:text-surface-300 transition-colors">
-                            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
-                            </svg>
-                        </button>
+                <!-- Add Member Modal Overlay -->
+                <Teleport to="body">
+                    <div v-if="showAddMember" class="fixed inset-0 z-[100] flex items-center justify-center p-4"
+                        @click.self="showAddMember = false; resetMemberForm()">
+                        <div class="fixed inset-0 bg-black/60 backdrop-blur-sm"></div>
+                        <div class="relative bg-surface-900 border border-surface-700/50 rounded-2xl shadow-2xl w-full max-w-lg animate-slide-up">
+                            <!-- Modal Header -->
+                            <div class="flex items-center justify-between px-6 py-4 border-b border-surface-800/50">
+                                <div>
+                                    <h3 class="text-lg font-semibold text-surface-100">Add Team Member</h3>
+                                    <p class="text-xs text-surface-500 mt-0.5">Employee ID will be auto-assigned</p>
+                                </div>
+                                <button @click="showAddMember = false; resetMemberForm()"
+                                    class="w-8 h-8 rounded-lg bg-surface-800/50 flex items-center justify-center text-surface-400 hover:text-surface-200 hover:bg-surface-800 transition-colors">
+                                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                                    </svg>
+                                </button>
+                            </div>
+
+                            <!-- Modal Body -->
+                            <form @submit.prevent="addMember" class="px-6 py-5 space-y-4">
+                                <div v-if="addMemberError" class="px-4 py-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-sm text-red-400">
+                                    {{ addMemberError }}
+                                </div>
+
+                                <div class="grid grid-cols-2 gap-4">
+                                    <!-- Name -->
+                                    <div>
+                                        <label class="block text-xs font-medium text-surface-400 mb-1.5">Full Name *</label>
+                                        <input v-model="addMemberForm.name" type="text" placeholder="John Doe"
+                                            class="input-field w-full" :class="{ 'border-red-500/50': addMemberErrors.name }" />
+                                        <p v-if="addMemberErrors.name" class="text-[11px] text-red-400 mt-1">{{ addMemberErrors.name }}</p>
+                                    </div>
+                                    <!-- Email -->
+                                    <div>
+                                        <label class="block text-xs font-medium text-surface-400 mb-1.5">Email *</label>
+                                        <input v-model="addMemberForm.email" type="email" placeholder="john@company.com"
+                                            class="input-field w-full" :class="{ 'border-red-500/50': addMemberErrors.email }" />
+                                        <p v-if="addMemberErrors.email" class="text-[11px] text-red-400 mt-1">{{ addMemberErrors.email }}</p>
+                                    </div>
+                                </div>
+
+                                <div class="grid grid-cols-2 gap-4">
+                                    <!-- Password -->
+                                    <div>
+                                        <label class="block text-xs font-medium text-surface-400 mb-1.5">Password *</label>
+                                        <input v-model="addMemberForm.password" type="password" placeholder="Min 6 characters"
+                                            class="input-field w-full" :class="{ 'border-red-500/50': addMemberErrors.password }" />
+                                        <p v-if="addMemberErrors.password" class="text-[11px] text-red-400 mt-1">{{ addMemberErrors.password }}</p>
+                                    </div>
+                                    <!-- Designation -->
+                                    <div>
+                                        <label class="block text-xs font-medium text-surface-400 mb-1.5">Designation *</label>
+                                        <select v-model="addMemberForm.designation"
+                                            class="input-field w-full appearance-none cursor-pointer">
+                                            <option v-for="d in designations" :key="d" :value="d">{{ d }}</option>
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <div class="grid grid-cols-3 gap-4">
+                                    <!-- Joining Date -->
+                                    <div>
+                                        <label class="block text-xs font-medium text-surface-400 mb-1.5">Joining Date *</label>
+                                        <input v-model="addMemberForm.joining_date" type="date"
+                                            class="input-field w-full" :class="{ 'border-red-500/50': addMemberErrors.joining_date }" />
+                                        <p v-if="addMemberErrors.joining_date" class="text-[11px] text-red-400 mt-1">{{ addMemberErrors.joining_date }}</p>
+                                    </div>
+                                    <!-- Salary -->
+                                    <div>
+                                        <label class="block text-xs font-medium text-surface-400 mb-1.5">Salary (₹/month) *</label>
+                                        <div class="relative">
+                                            <span class="absolute left-3 top-1/2 -translate-y-1/2 text-surface-500 text-sm">₹</span>
+                                            <input v-model="addMemberForm.salary" type="number" min="1" step="100" placeholder="25000"
+                                                class="input-field w-full pl-7" :class="{ 'border-red-500/50': addMemberErrors.salary }" />
+                                        </div>
+                                        <p v-if="addMemberErrors.salary" class="text-[11px] text-red-400 mt-1">{{ addMemberErrors.salary }}</p>
+                                    </div>
+                                    <!-- Min Hours -->
+                                    <div>
+                                        <label class="block text-xs font-medium text-surface-400 mb-1.5">Min Hours/Day *</label>
+                                        <div class="relative">
+                                            <input v-model="addMemberForm.min_hours_per_day" type="number" min="1" max="24" step="0.5" placeholder="8"
+                                                class="input-field w-full pr-8" :class="{ 'border-red-500/50': addMemberErrors.min_hours_per_day }" />
+                                            <span class="absolute right-3 top-1/2 -translate-y-1/2 text-surface-500 text-xs">hrs</span>
+                                        </div>
+                                        <p v-if="addMemberErrors.min_hours_per_day" class="text-[11px] text-red-400 mt-1">{{ addMemberErrors.min_hours_per_day }}</p>
+                                    </div>
+                                </div>
+
+                                <!-- Modal Footer -->
+                                <div class="flex items-center justify-end gap-3 pt-3 border-t border-surface-800/50">
+                                    <button type="button" @click="showAddMember = false; resetMemberForm()"
+                                        class="btn-ghost text-sm px-4 py-2">Cancel</button>
+                                    <button type="submit" :disabled="addMemberLoading"
+                                        class="btn-primary text-sm px-5 py-2.5 justify-center min-w-[120px]">
+                                        <span v-if="addMemberLoading" class="flex items-center gap-2">
+                                            <div class="w-3.5 h-3.5 border-2 border-surface-950/30 border-t-surface-950 rounded-full animate-spin"></div>
+                                            Adding...
+                                        </span>
+                                        <span v-else>Add Member</span>
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
                     </div>
-                    <div v-if="addMemberError" class="mb-4 px-4 py-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-sm text-red-400">
-                        {{ addMemberError }}
-                    </div>
-                    <form @submit.prevent="addMember" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-                        <div>
-                            <label class="block text-xs font-medium text-surface-400 mb-1.5">Full Name</label>
-                            <input v-model="addMemberForm.name" type="text" required placeholder="John Doe"
-                                class="input-field w-full" />
-                        </div>
-                        <div>
-                            <label class="block text-xs font-medium text-surface-400 mb-1.5">Email</label>
-                            <input v-model="addMemberForm.email" type="email" required placeholder="john@company.com"
-                                class="input-field w-full" />
-                        </div>
-                        <div>
-                            <label class="block text-xs font-medium text-surface-400 mb-1.5">Password</label>
-                            <input v-model="addMemberForm.password" type="password" required minlength="6" placeholder="Min 6 chars"
-                                class="input-field w-full" />
-                        </div>
-                        <div>
-                            <label class="block text-xs font-medium text-surface-400 mb-1.5">Designation</label>
-                            <select v-model="addMemberForm.designation"
-                                class="input-field w-full appearance-none cursor-pointer">
-                                <option v-for="d in designations" :key="d" :value="d">{{ d }}</option>
-                            </select>
-                        </div>
-                        <div class="flex items-end">
-                            <button type="submit" :disabled="addMemberLoading"
-                                class="btn-primary w-full py-2.5 text-sm justify-center">
-                                <span v-if="addMemberLoading" class="flex items-center gap-2">
-                                    <div class="w-3.5 h-3.5 border-2 border-surface-950/30 border-t-surface-950 rounded-full animate-spin"></div>
-                                    Adding...
-                                </span>
-                                <span v-else>Add Member</span>
-                            </button>
-                        </div>
-                    </form>
-                </div>
+                </Teleport>
 
                 <!-- Bidders table -->
                 <div class="card overflow-hidden">
@@ -462,39 +568,45 @@ onMounted(async () => {
                         <table class="w-full">
                             <thead>
                                 <tr class="border-b border-surface-700/30">
-                                    <th class="px-6 py-3 text-left table-header">Bidder</th>
-                                    <th class="px-6 py-3 text-left table-header">Designation</th>
-                                    <th class="px-6 py-3 text-left table-header">Status</th>
-                                    <th class="px-6 py-3 text-center table-header">Today</th>
-                                    <th class="px-6 py-3 text-center table-header">Week</th>
-                                    <th class="px-6 py-3 text-center table-header">Total</th>
-                                    <th class="px-6 py-3 text-center table-header">Hours</th>
-                                    <th class="px-6 py-3 text-right table-header">Actions</th>
+                                    <th class="px-4 py-3 text-left table-header">Emp ID</th>
+                                    <th class="px-4 py-3 text-left table-header">Member</th>
+                                    <th class="px-4 py-3 text-left table-header">Designation</th>
+                                    <th class="px-4 py-3 text-left table-header">Status</th>
+                                    <th class="px-4 py-3 text-center table-header">Salary</th>
+                                    <th class="px-4 py-3 text-center table-header">Min Hrs</th>
+                                    <th class="px-4 py-3 text-center table-header">Today</th>
+                                    <th class="px-4 py-3 text-center table-header">Hours</th>
+                                    <th class="px-4 py-3 text-right table-header">Actions</th>
                                 </tr>
                             </thead>
                             <tbody class="text-sm">
                                 <tr v-for="bidder in bidders" :key="bidder.id"
                                     class="border-b border-surface-800/30 hover:bg-surface-800/20 transition-colors"
                                     :class="{ 'opacity-50': !bidder.is_active }">
-                                    <td class="px-6 py-4">
+                                    <td class="px-4 py-4">
+                                        <span class="font-mono text-xs text-surface-400 bg-surface-800/50 px-2 py-0.5 rounded">
+                                            {{ bidder.employee_id || '-' }}
+                                        </span>
+                                    </td>
+                                    <td class="px-4 py-4">
                                         <div class="flex items-center gap-3">
                                             <div class="relative">
-                                                <div class="w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold"
+                                                <div class="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold"
                                                     :class="getUserColor(bidder.name)">
                                                     {{ bidder.name.charAt(0).toUpperCase() }}
                                                 </div>
-                                                <div v-if="bidder.is_online" class="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-400 border-2 border-surface-900"></div>
+                                                <div v-if="bidder.is_online" class="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-emerald-400 border-2 border-surface-900"></div>
                                             </div>
                                             <div>
-                                                <p class="font-medium text-surface-200">{{ bidder.name }}</p>
-                                                <p class="text-xs text-surface-500">{{ bidder.email }}</p>
+                                                <p class="font-medium text-surface-200 text-sm">{{ bidder.name }}</p>
+                                                <p class="text-[11px] text-surface-500">{{ bidder.email }}</p>
                                             </div>
                                         </div>
                                     </td>
-                                    <td class="px-6 py-4">
+                                    <td class="px-4 py-4">
                                         <select :value="bidder.designation || ''"
                                             @change="updateMemberDesignation(bidder.id, $event.target.value)"
-                                            class="text-xs font-medium px-2 py-1 rounded-md border-0 cursor-pointer appearance-none"
+                                            class="text-[11px] font-medium px-2 py-1 rounded-md border-0 cursor-pointer appearance-none"
                                             :class="designationBadge[bidder.designation] || 'bg-surface-700/50 text-surface-400'"
                                             style="background-image: none;">
                                             <option value="" disabled>Set role</option>
@@ -502,16 +614,19 @@ onMounted(async () => {
                                                 class="bg-surface-800 text-surface-200">{{ d }}</option>
                                         </select>
                                     </td>
-                                    <td class="px-6 py-4">
+                                    <td class="px-4 py-4">
                                         <span v-if="!bidder.is_active" class="badge-danger">Disabled</span>
                                         <span v-else-if="bidder.is_online" class="badge-success">Online</span>
                                         <span v-else class="badge-neutral">Offline</span>
                                     </td>
-                                    <td class="px-6 py-4 text-center font-mono text-surface-300">{{ bidder.bids_today }}</td>
-                                    <td class="px-6 py-4 text-center font-mono text-surface-300">{{ bidder.bids_this_week }}</td>
-                                    <td class="px-6 py-4 text-center font-mono text-surface-300">{{ bidder.total_bids }}</td>
-                                    <td class="px-6 py-4 text-center font-mono text-surface-300">{{ bidder.today_hours }}h</td>
-                                    <td class="px-6 py-4 text-right">
+                                    <td class="px-4 py-4 text-center text-xs font-mono text-surface-300">{{ formatSalary(bidder.salary) }}</td>
+                                    <td class="px-4 py-4 text-center text-xs font-mono text-surface-300">{{ bidder.min_hours_per_day }}h</td>
+                                    <td class="px-4 py-4 text-center font-mono text-surface-300">{{ bidder.bids_today }}</td>
+                                    <td class="px-4 py-4 text-center font-mono"
+                                        :class="bidder.today_hours < bidder.min_hours_per_day && bidder.is_online ? 'text-amber-400' : 'text-surface-300'">
+                                        {{ bidder.today_hours }}h
+                                    </td>
+                                    <td class="px-4 py-4 text-right">
                                         <button @click="toggleMemberActive(bidder.id, bidder.is_active)"
                                             :class="bidder.is_active ? 'text-red-400 hover:text-red-300' : 'text-emerald-400 hover:text-emerald-300'"
                                             class="btn-ghost text-xs">

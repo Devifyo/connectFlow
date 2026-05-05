@@ -46,8 +46,12 @@ class TenantAdminController extends Controller
                     'id' => $bidder->id,
                     'name' => $bidder->name,
                     'email' => $bidder->email,
+                    'employee_id' => $bidder->employee_id,
                     'designation' => $bidder->designation,
                     'is_active' => $bidder->is_active,
+                    'joining_date' => $bidder->joining_date,
+                    'salary' => $bidder->salary ? (float) $bidder->salary : null,
+                    'min_hours_per_day' => (float) $bidder->min_hours_per_day,
                     'total_bids' => $bidder->bids_count,
                     'bids_today' => $bidsToday,
                     'bids_this_week' => $bidsThisWeek,
@@ -68,15 +72,35 @@ class TenantAdminController extends Controller
             'email' => 'required|email|unique:users,email',
             'password' => 'required|string|min:6',
             'designation' => 'required|in:Intern BDE,BDE Bidder,Senior BDE',
+            'joining_date' => 'required|date',
+            'salary' => 'required|numeric|min:0',
+            'min_hours_per_day' => 'required|numeric|min:1|max:24',
         ]);
+
+        $tenantId = auth()->user()->tenant_id;
+        $lastEmp = User::withoutGlobalScopes()
+            ->where('tenant_id', $tenantId)
+            ->whereNotNull('employee_id')
+            ->orderByRaw('CAST(SUBSTRING(employee_id, 4) AS UNSIGNED) DESC')
+            ->first();
+
+        $nextNum = 1;
+        if ($lastEmp && preg_match('/^CF-(\d+)$/', $lastEmp->employee_id, $m)) {
+            $nextNum = (int) $m[1] + 1;
+        }
+        $employeeId = 'CF-' . str_pad($nextNum, 4, '0', STR_PAD_LEFT);
 
         $user = User::create([
             'name' => $request->name,
             'email' => $request->email,
             'password' => Hash::make($request->password),
-            'tenant_id' => auth()->user()->tenant_id,
+            'tenant_id' => $tenantId,
             'is_active' => true,
             'designation' => $request->designation,
+            'employee_id' => $employeeId,
+            'joining_date' => $request->joining_date,
+            'salary' => $request->salary,
+            'min_hours_per_day' => $request->min_hours_per_day,
         ]);
         $user->assignRole('Bidder');
 
@@ -86,6 +110,7 @@ class TenantAdminController extends Controller
                 'id' => $user->id,
                 'name' => $user->name,
                 'email' => $user->email,
+                'employee_id' => $user->employee_id,
                 'designation' => $user->designation,
             ],
         ]);
@@ -96,15 +121,17 @@ class TenantAdminController extends Controller
         $request->validate([
             'designation' => 'sometimes|in:Intern BDE,BDE Bidder,Senior BDE',
             'is_active' => 'sometimes|boolean',
+            'salary' => 'sometimes|numeric|min:0',
+            'min_hours_per_day' => 'sometimes|numeric|min:1|max:24',
         ]);
 
         $user = User::findOrFail($id);
 
-        if ($request->has('designation')) {
-            $user->designation = $request->designation;
-        }
-        if ($request->has('is_active')) {
-            $user->is_active = $request->is_active;
+        $fields = ['designation', 'is_active', 'salary', 'min_hours_per_day'];
+        foreach ($fields as $field) {
+            if ($request->has($field)) {
+                $user->$field = $request->$field;
+            }
         }
         $user->save();
 
