@@ -253,8 +253,9 @@ function toggleDayDetail(dateKey) {
 
 function formatHours(h) {
     if (!h || h === 0) return '0h 0m';
-    const hours = Math.floor(h);
-    const mins = Math.round((h - hours) * 60);
+    const val = Math.abs(h);
+    const hours = Math.floor(val);
+    const mins = Math.round((val - hours) * 60);
     if (hours === 0) return `${mins}m`;
     if (mins === 0) return `${hours}h`;
     return `${hours}h ${mins}m`;

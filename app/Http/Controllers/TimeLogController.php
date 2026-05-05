@@ -46,7 +46,7 @@ class TimeLogController extends Controller
         }
 
         $now = Carbon::now('UTC');
-        $totalHours = $now->floatDiffInHours($log->login_time);
+        $totalHours = abs($now->floatDiffInHours($log->login_time));
 
         $log->update([
             'logout_time' => $now,
@@ -131,7 +131,7 @@ class TimeLogController extends Controller
                 if ($log->logout_time) {
                     $dayHours += (float) $log->total_hours;
                 } elseif ($d->eq($today)) {
-                    $dayHours += Carbon::now('UTC')->floatDiffInHours($log->login_time);
+                    $dayHours += abs(Carbon::now('UTC')->floatDiffInHours($log->login_time));
                 }
             }
 
