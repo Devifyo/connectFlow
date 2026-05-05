@@ -214,6 +214,47 @@ function formatSalary(amount) {
     return '₹' + Number(amount).toLocaleString('en-IN');
 }
 
+// --- Edit Member ---
+const editMember = ref(null);
+const editForm = ref({});
+const editErrors = ref({});
+const editLoading = ref(false);
+
+function openEditMember(bidder) {
+    editMember.value = bidder;
+    editForm.value = {
+        designation: bidder.designation || 'BDE Bidder',
+        salary: bidder.salary || '',
+        min_hours_per_day: bidder.min_hours_per_day || '8',
+    };
+    editErrors.value = {};
+}
+
+function closeEditMember() {
+    editMember.value = null;
+    editForm.value = {};
+    editErrors.value = {};
+}
+
+async function saveEditMember() {
+    const errors = {};
+    if (!editForm.value.salary || parseFloat(editForm.value.salary) <= 0) errors.salary = 'Salary must be > 0';
+    if (!editForm.value.min_hours_per_day || parseFloat(editForm.value.min_hours_per_day) < 1 || parseFloat(editForm.value.min_hours_per_day) > 24) errors.min_hours_per_day = '1-24 hours';
+    editErrors.value = errors;
+    if (Object.keys(errors).length > 0) return;
+
+    editLoading.value = true;
+    try {
+        await axios.put(`/api/admin/bidders/${editMember.value.id}`, {
+            designation: editForm.value.designation,
+            salary: parseFloat(editForm.value.salary),
+            min_hours_per_day: parseFloat(editForm.value.min_hours_per_day),
+        });
+        closeEditMember();
+        await fetchTeamData();
+    } catch (e) {} finally { editLoading.value = false; }
+}
+
 onMounted(async () => {
     ready.value = true;
     await Promise.all([fetchPipelineData(), fetchTeamData()]);
@@ -542,6 +583,91 @@ onMounted(async () => {
                     </div>
                 </Teleport>
 
+                <!-- Edit Member Modal -->
+                <Teleport to="body">
+                    <div v-if="editMember" class="fixed inset-0 z-[100] flex items-center justify-center p-4"
+                        @click.self="closeEditMember()">
+                        <div class="fixed inset-0 bg-black/60 backdrop-blur-sm"></div>
+                        <div class="relative bg-surface-900 border border-surface-700/50 rounded-2xl shadow-2xl w-full max-w-md animate-slide-up">
+                            <div class="flex items-center justify-between px-6 py-4 border-b border-surface-800/50">
+                                <div>
+                                    <h3 class="text-lg font-semibold text-surface-100">Edit Member</h3>
+                                    <p class="text-xs text-surface-500 mt-0.5">{{ editMember.name }} &mdash; {{ editMember.employee_id || 'No ID' }}</p>
+                                </div>
+                                <button @click="closeEditMember()"
+                                    class="w-8 h-8 rounded-lg bg-surface-800/50 flex items-center justify-center text-surface-400 hover:text-surface-200 hover:bg-surface-800 transition-colors">
+                                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                                    </svg>
+                                </button>
+                            </div>
+                            <form @submit.prevent="saveEditMember" class="px-6 py-5 space-y-4">
+                                <!-- Designation -->
+                                <div>
+                                    <label class="block text-xs font-medium text-surface-400 mb-1.5">Designation</label>
+                                    <select v-model="editForm.designation"
+                                        class="input-field w-full appearance-none cursor-pointer">
+                                        <option v-for="d in designations" :key="d" :value="d">{{ d }}</option>
+                                    </select>
+                                </div>
+                                <div class="grid grid-cols-2 gap-4">
+                                    <!-- Salary -->
+                                    <div>
+                                        <label class="block text-xs font-medium text-surface-400 mb-1.5">Salary (₹/month)</label>
+                                        <div class="relative">
+                                            <span class="absolute left-3 top-1/2 -translate-y-1/2 text-surface-500 text-sm">₹</span>
+                                            <input v-model="editForm.salary" type="number" min="1" step="100"
+                                                class="input-field w-full pl-7" :class="{ 'border-red-500/50': editErrors.salary }" />
+                                        </div>
+                                        <p v-if="editErrors.salary" class="text-[11px] text-red-400 mt-1">{{ editErrors.salary }}</p>
+                                    </div>
+                                    <!-- Min Hours -->
+                                    <div>
+                                        <label class="block text-xs font-medium text-surface-400 mb-1.5">Min Hours/Day</label>
+                                        <div class="relative">
+                                            <input v-model="editForm.min_hours_per_day" type="number" min="1" max="24" step="0.5"
+                                                class="input-field w-full pr-8" :class="{ 'border-red-500/50': editErrors.min_hours_per_day }" />
+                                            <span class="absolute right-3 top-1/2 -translate-y-1/2 text-surface-500 text-xs">hrs</span>
+                                        </div>
+                                        <p v-if="editErrors.min_hours_per_day" class="text-[11px] text-red-400 mt-1">{{ editErrors.min_hours_per_day }}</p>
+                                    </div>
+                                </div>
+                                <!-- Info row -->
+                                <div class="rounded-lg bg-surface-800/40 border border-surface-700/20 p-3 grid grid-cols-2 gap-3 text-xs">
+                                    <div>
+                                        <span class="text-surface-500">Employee ID</span>
+                                        <p class="text-surface-200 font-mono mt-0.5">{{ editMember.employee_id || '-' }}</p>
+                                    </div>
+                                    <div>
+                                        <span class="text-surface-500">Joining Date</span>
+                                        <p class="text-surface-200 mt-0.5">{{ editMember.joining_date || '-' }}</p>
+                                    </div>
+                                    <div>
+                                        <span class="text-surface-500">Email</span>
+                                        <p class="text-surface-200 mt-0.5">{{ editMember.email }}</p>
+                                    </div>
+                                    <div>
+                                        <span class="text-surface-500">Total Bids</span>
+                                        <p class="text-surface-200 font-mono mt-0.5">{{ editMember.total_bids }}</p>
+                                    </div>
+                                </div>
+                                <!-- Footer -->
+                                <div class="flex items-center justify-end gap-3 pt-3 border-t border-surface-800/50">
+                                    <button type="button" @click="closeEditMember()" class="btn-ghost text-sm px-4 py-2">Cancel</button>
+                                    <button type="submit" :disabled="editLoading"
+                                        class="btn-primary text-sm px-5 py-2.5 justify-center min-w-[100px]">
+                                        <span v-if="editLoading" class="flex items-center gap-2">
+                                            <div class="w-3.5 h-3.5 border-2 border-surface-950/30 border-t-surface-950 rounded-full animate-spin"></div>
+                                            Saving...
+                                        </span>
+                                        <span v-else>Save</span>
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </Teleport>
+
                 <!-- Bidders table -->
                 <div class="card overflow-hidden">
                     <div class="px-6 py-4 border-b border-surface-700/30 flex items-center justify-between">
@@ -626,7 +752,11 @@ onMounted(async () => {
                                         :class="bidder.today_hours < bidder.min_hours_per_day && bidder.is_online ? 'text-amber-400' : 'text-surface-300'">
                                         {{ bidder.today_hours }}h
                                     </td>
-                                    <td class="px-4 py-4 text-right">
+                                    <td class="px-4 py-4 text-right space-x-1">
+                                        <button @click="openEditMember(bidder)"
+                                            class="btn-ghost text-xs text-surface-300 hover:text-surface-100">
+                                            Edit
+                                        </button>
                                         <button @click="toggleMemberActive(bidder.id, bidder.is_active)"
                                             :class="bidder.is_active ? 'text-red-400 hover:text-red-300' : 'text-emerald-400 hover:text-emerald-300'"
                                             class="btn-ghost text-xs">
