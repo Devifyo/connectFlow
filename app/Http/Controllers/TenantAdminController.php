@@ -138,6 +138,39 @@ class TenantAdminController extends Controller
         return response()->json(['status' => 'success']);
     }
 
+    public function impersonate(Request $request, $id)
+    {
+        $target = User::findOrFail($id);
+
+        if ($target->tenant_id !== auth()->user()->tenant_id) {
+            return response()->json(['error' => 'Cannot impersonate users from other tenants.'], 403);
+        }
+
+        if ($target->id === auth()->id()) {
+            return response()->json(['error' => 'Cannot impersonate yourself.'], 400);
+        }
+
+        session()->put('impersonator_id', auth()->id());
+        auth()->login($target);
+
+        return response()->json(['status' => 'success', 'redirect' => '/dashboard']);
+    }
+
+    public function stopImpersonate(Request $request)
+    {
+        $impersonatorId = session()->get('impersonator_id');
+
+        if (!$impersonatorId) {
+            return response()->json(['error' => 'Not impersonating.'], 400);
+        }
+
+        $admin = User::withoutGlobalScopes()->findOrFail($impersonatorId);
+        session()->forget('impersonator_id');
+        auth()->login($admin);
+
+        return response()->json(['status' => 'success', 'redirect' => '/dashboard']);
+    }
+
     public function efficiency()
     {
         $now = Carbon::now('UTC');

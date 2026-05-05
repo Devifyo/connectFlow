@@ -40,9 +40,13 @@ Route::middleware('auth')->group(function () {
         Route::get('/api/admin/bidders', [\App\Http\Controllers\TenantAdminController::class, 'bidders']);
         Route::post('/api/admin/bidders', [\App\Http\Controllers\TenantAdminController::class, 'addMember']);
         Route::put('/api/admin/bidders/{id}', [\App\Http\Controllers\TenantAdminController::class, 'updateMember']);
+        Route::post('/api/admin/impersonate/{id}', [\App\Http\Controllers\TenantAdminController::class, 'impersonate']);
         Route::get('/api/admin/reports/efficiency', [\App\Http\Controllers\TenantAdminController::class, 'efficiency']);
         Route::put('/api/admin/bids/{id}/status', [\App\Http\Controllers\TenantAdminController::class, 'updateBidStatus']);
     });
+
+    // Stop impersonation (accessible while impersonating)
+    Route::post('/api/admin/stop-impersonate', [\App\Http\Controllers\TenantAdminController::class, 'stopImpersonate']);
 
     // Pipeline access (TenantAdmin, SuperAdmin, Senior BDE)
     Route::middleware('can:manage-pipeline')->group(function () {

@@ -216,6 +216,13 @@ function formatSalary(amount) {
     return '₹' + Number(amount).toLocaleString('en-IN');
 }
 
+async function impersonateUser(id) {
+    try {
+        const { data } = await axios.post(`/api/admin/impersonate/${id}`);
+        if (data.redirect) window.location.href = data.redirect;
+    } catch (e) {}
+}
+
 // --- Edit Member ---
 const editMember = ref(null);
 const editForm = ref({});
@@ -757,6 +764,11 @@ onMounted(async () => {
                                         {{ bidder.today_hours }}h
                                     </td>
                                     <td class="px-4 py-4 text-right space-x-1">
+                                        <button @click="impersonateUser(bidder.id)"
+                                            class="btn-ghost text-xs text-brand hover:text-brand/80"
+                                            title="Login as this user">
+                                            Impersonate
+                                        </button>
                                         <button @click="openEditMember(bidder)"
                                             class="btn-ghost text-xs text-surface-300 hover:text-surface-100">
                                             Edit

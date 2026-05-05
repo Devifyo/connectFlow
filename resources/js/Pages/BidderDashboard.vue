@@ -3,7 +3,14 @@ import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { Head, router } from '@inertiajs/vue3';
 import axios from 'axios';
 
-const props = defineProps(['auth']);
+const props = defineProps(['auth', 'impersonating']);
+
+async function stopImpersonating() {
+    try {
+        const { data } = await axios.post('/api/admin/stop-impersonate');
+        if (data.redirect) window.location.href = data.redirect;
+    } catch (e) {}
+}
 
 // --- Punch Clock State ---
 const isPunchedIn = ref(false);
@@ -345,6 +352,22 @@ onUnmounted(() => {
     <Head title="Dashboard" />
 
     <div class="min-h-screen bg-surface-950 text-surface-100 flex flex-col">
+        <!-- Impersonation Banner -->
+        <div v-if="impersonating" class="bg-amber-500/10 border-b border-amber-500/30 px-4 py-2 flex items-center justify-center gap-3 sticky top-0 z-[60]">
+            <svg class="w-4 h-4 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                <path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+            </svg>
+            <span class="text-sm text-amber-300">
+                You are viewing as <strong class="text-amber-200">{{ auth.user.name }}</strong>
+                <span class="text-amber-400/70 ml-1">(impersonated by {{ impersonating.admin_name }})</span>
+            </span>
+            <button @click="stopImpersonating"
+                class="ml-2 px-3 py-1 text-xs font-medium rounded-lg bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 transition-colors">
+                Stop &amp; Return to Admin
+            </button>
+        </div>
+
         <!-- Top nav -->
         <nav class="sticky top-0 z-50 bg-surface-950/80 backdrop-blur-xl border-b border-surface-800/50">
             <div class="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">

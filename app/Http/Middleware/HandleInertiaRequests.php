@@ -29,11 +29,20 @@ class HandleInertiaRequests extends Middleware
      */
     public function share(Request $request): array
     {
+        $impersonatorId = session()->get('impersonator_id');
+        $impersonator = null;
+        if ($impersonatorId) {
+            $impersonator = \App\Models\User::withoutGlobalScopes()->find($impersonatorId);
+        }
+
         return [
             ...parent::share($request),
             'auth' => [
                 'user' => $request->user(),
             ],
+            'impersonating' => $impersonatorId ? [
+                'admin_name' => $impersonator?->name,
+            ] : null,
         ];
     }
 }
