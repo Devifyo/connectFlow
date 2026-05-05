@@ -19,13 +19,28 @@ class BidController extends Controller
             return response()->json(['status' => 'error', 'message' => 'Invalid or unsupported URL format.'], 400);
         }
 
-        $existingBid = Bid::where('clean_job_id', $cleanId)->first();
+        $existingBid = Bid::where('clean_job_id', $cleanId)
+            ->where('user_id', '!=', auth()->id())
+            ->first();
 
         if ($existingBid) {
             return response()->json([
                 'status' => 'collision',
                 'message' => 'Another bidder in your agency has already bid on this job!',
                 'bid' => $existingBid
+            ]);
+        }
+
+        $ownBid = Bid::where('clean_job_id', $cleanId)
+            ->where('user_id', auth()->id())
+            ->first();
+
+        if ($ownBid) {
+            return response()->json([
+                'status' => 'clear',
+                'message' => 'You already bid on this job. No collision with teammates.',
+                'clean_job_id' => $cleanId,
+                'already_submitted' => true,
             ]);
         }
 
