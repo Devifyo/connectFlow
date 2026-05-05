@@ -157,13 +157,15 @@ function resetMemberForm() {
 function validateMemberForm() {
     const errors = {};
     const f = addMemberForm.value;
-    if (!f.name.trim()) errors.name = 'Name is required';
-    if (!f.email.trim()) errors.email = 'Email is required';
+    if (!f.name || !f.name.trim()) errors.name = 'Name is required';
+    if (!f.email || !f.email.trim()) errors.email = 'Email is required';
     else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email)) errors.email = 'Invalid email format';
     if (!f.password || f.password.length < 6) errors.password = 'Minimum 6 characters';
     if (!f.joining_date) errors.joining_date = 'Joining date is required';
-    if (!f.salary || parseFloat(f.salary) <= 0) errors.salary = 'Salary must be greater than 0';
-    if (!f.min_hours_per_day || parseFloat(f.min_hours_per_day) < 1 || parseFloat(f.min_hours_per_day) > 24) errors.min_hours_per_day = 'Must be between 1-24 hours';
+    const salaryNum = Number(f.salary);
+    if (isNaN(salaryNum) || salaryNum <= 0) errors.salary = 'Salary must be greater than 0';
+    const hoursNum = Number(f.min_hours_per_day);
+    if (isNaN(hoursNum) || hoursNum < 1 || hoursNum > 24) errors.min_hours_per_day = 'Must be between 1-24 hours';
     addMemberErrors.value = errors;
     return Object.keys(errors).length === 0;
 }
@@ -175,8 +177,8 @@ async function addMember() {
     try {
         await axios.post('/api/admin/bidders', {
             ...addMemberForm.value,
-            salary: parseFloat(addMemberForm.value.salary),
-            min_hours_per_day: parseFloat(addMemberForm.value.min_hours_per_day),
+            salary: Number(addMemberForm.value.salary),
+            min_hours_per_day: Number(addMemberForm.value.min_hours_per_day),
         });
         showAddMember.value = false;
         resetMemberForm();
@@ -238,8 +240,10 @@ function closeEditMember() {
 
 async function saveEditMember() {
     const errors = {};
-    if (!editForm.value.salary || parseFloat(editForm.value.salary) <= 0) errors.salary = 'Salary must be > 0';
-    if (!editForm.value.min_hours_per_day || parseFloat(editForm.value.min_hours_per_day) < 1 || parseFloat(editForm.value.min_hours_per_day) > 24) errors.min_hours_per_day = '1-24 hours';
+    const salaryNum = Number(editForm.value.salary);
+    if (isNaN(salaryNum) || salaryNum <= 0) errors.salary = 'Salary must be > 0';
+    const hoursNum = Number(editForm.value.min_hours_per_day);
+    if (isNaN(hoursNum) || hoursNum < 1 || hoursNum > 24) errors.min_hours_per_day = '1-24 hours';
     editErrors.value = errors;
     if (Object.keys(errors).length > 0) return;
 
@@ -247,8 +251,8 @@ async function saveEditMember() {
     try {
         await axios.put(`/api/admin/bidders/${editMember.value.id}`, {
             designation: editForm.value.designation,
-            salary: parseFloat(editForm.value.salary),
-            min_hours_per_day: parseFloat(editForm.value.min_hours_per_day),
+            salary: Number(editForm.value.salary),
+            min_hours_per_day: Number(editForm.value.min_hours_per_day),
         });
         closeEditMember();
         await fetchTeamData();
