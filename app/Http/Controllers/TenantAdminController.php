@@ -7,6 +7,7 @@ use Illuminate\Support\Facades\Hash;
 use App\Models\User;
 use App\Models\Bid;
 use App\Models\TimeLog;
+use App\Models\AttendanceOverride;
 use Carbon\Carbon;
 
 class TenantAdminController extends Controller
@@ -224,5 +225,229 @@ class TenantAdminController extends Controller
                 'created_at' => $bid->created_at->toIso8601String(),
             ],
         ]);
+    }
+
+    public function memberProfile($id)
+    {
+        $user = User::findOrFail($id);
+
+        return response()->json([
+            'member' => [
+                'id' => $user->id,
+                'name' => $user->name,
+                'email' => $user->email,
+                'employee_id' => $user->employee_id,
+                'designation' => $user->designation,
+                'joining_date' => $user->joining_date,
+                'salary' => $user->salary ? (float) $user->salary : null,
+                'min_hours_per_day' => (float) $user->min_hours_per_day,
+                'is_active' => $user->is_active,
+                'created_at' => $user->created_at?->toIso8601String(),
+            ],
+        ]);
+    }
+
+    public function memberBidReport(Request $request, $id)
+    {
+        $request->validate([
+            'filter' => 'nullable|in:today,week,month,range',
+            'from' => 'nullable|date',
+            'to' => 'nullable|date',
+        ]);
+
+        $user = User::findOrFail($id);
+        $now = Carbon::now('UTC');
+        $filter = $request->filter ?? 'month';
+
+        $query = Bid::where('user_id', $user->id);
+
+        if ($filter === 'today') {
+            $query->whereDate('created_at', $now->toDateString());
+        } elseif ($filter === 'week') {
+            $query->where('created_at', '>=', $now->copy()->startOfWeek());
+        } elseif ($filter === 'month') {
+            $query->where('created_at', '>=', $now->copy()->startOfMonth());
+        } elseif ($filter === 'range' && $request->from && $request->to) {
+            $query->whereBetween('created_at', [
+                Carbon::parse($request->from)->startOfDay(),
+                Carbon::parse($request->to)->endOfDay(),
+            ]);
+        }
+
+        $bids = $query->orderBy('created_at', 'desc')->get();
+
+        $statusCounts = $bids->groupBy('status')->map->count();
+        $total = $bids->count();
+
+        return response()->json([
+            'filter' => $filter,
+            'total' => $total,
+            'status_counts' => [
+                'Submitted' => $statusCounts->get('Submitted', 0),
+                'Interviewing' => $statusCounts->get('Interviewing', 0),
+                'Hired' => $statusCounts->get('Hired', 0),
+                'Rejected' => $statusCounts->get('Rejected', 0),
+            ],
+            'bids' => $bids->map(fn ($b) => [
+                'bid_id' => $b->bid_id,
+                'job_title' => $b->job_title,
+                'job_url' => $b->job_url,
+                'platform_name' => $b->platform_name,
+                'connects_used' => $b->connects_used,
+                'status' => $b->status,
+                'created_at' => $b->created_at->toIso8601String(),
+            ]),
+        ]);
+    }
+
+    public function memberAttendance(Request $request, $id)
+    {
+        $request->validate([
+            'year' => 'nullable|integer|min:2020|max:2099',
+            'month' => 'nullable|integer|min:1|max:12',
+        ]);
+
+        $user = User::findOrFail($id);
+
+        $year = (int) ($request->year ?? now()->year);
+        $month = (int) ($request->month ?? now()->month);
+
+        $startOfMonth = Carbon::createFromDate($year, $month, 1, 'UTC')->startOfDay();
+        $today = Carbon::now('UTC')->startOfDay();
+
+        $logs = TimeLog::where('user_id', $user->id)
+            ->whereBetween('date', [$startOfMonth->toDateString(), $startOfMonth->copy()->endOfMonth()->toDateString()])
+            ->orderBy('login_time')
+            ->get();
+
+        $overrides = AttendanceOverride::where('user_id', $user->id)
+            ->whereBetween('date', [$startOfMonth->toDateString(), $startOfMonth->copy()->endOfMonth()->toDateString()])
+            ->get()
+            ->keyBy(fn ($o) => $o->date->format('Y-m-d'));
+
+        $grouped = $logs->groupBy(fn ($log) => $log->date->format('Y-m-d'));
+        $userCreatedAt = Carbon::parse($user->created_at)->startOfDay();
+
+        $days = [];
+        $totalWorkedHours = 0.0;
+        $presentDays = 0;
+        $absentDays = 0;
+
+        for ($d = $startOfMonth->copy(); $d->lte($startOfMonth->copy()->endOfMonth()); $d->addDay()) {
+            $dateKey = $d->format('Y-m-d');
+            $isWeekend = in_array($d->dayOfWeek, [0, 6]);
+            $isFuture = $d->gt($today);
+            $isBeforeJoin = $d->lt($userCreatedAt);
+
+            $override = $overrides->get($dateKey);
+            $dayLogs = $grouped->get($dateKey, collect());
+            $dayHours = 0.0;
+
+            foreach ($dayLogs as $log) {
+                if ($log->logout_time) {
+                    $dayHours += abs((float) $log->total_hours);
+                } elseif ($d->eq($today)) {
+                    $dayHours += abs(Carbon::now('UTC')->floatDiffInHours($log->login_time));
+                }
+            }
+
+            if ($override && $override->manual_hours !== null) {
+                $dayHours = (float) $override->manual_hours;
+            }
+
+            $dayHours = round($dayHours, 2);
+
+            $sessions = $dayLogs->map(function ($l) {
+                $hours = abs((float) $l->total_hours);
+                if (!$l->logout_time) {
+                    $hours = abs(round(Carbon::now('UTC')->floatDiffInHours($l->login_time), 4));
+                }
+                return [
+                    'log_id' => $l->log_id,
+                    'in' => $l->login_time?->toIso8601String(),
+                    'out' => $l->logout_time?->toIso8601String(),
+                    'hours' => round($hours, 2),
+                ];
+            })->values();
+
+            if ($override) {
+                $status = $override->status;
+                if ($status === 'present') { $presentDays++; $totalWorkedHours += $dayHours; }
+                elseif ($status === 'absent') { $absentDays++; }
+            } elseif ($isBeforeJoin) {
+                $status = 'na';
+            } elseif ($isFuture) {
+                $status = 'future';
+            } elseif ($dayLogs->count() > 0 || $dayHours > 0) {
+                $status = 'present';
+                $presentDays++;
+                $totalWorkedHours += $dayHours;
+            } elseif ($isWeekend) {
+                $status = 'weekend';
+            } else {
+                $status = 'absent';
+                $absentDays++;
+            }
+
+            $days[] = [
+                'date' => $dateKey,
+                'day' => (int) $d->format('d'),
+                'day_name' => $d->format('D'),
+                'status' => $status,
+                'hours' => $dayHours,
+                'sessions' => $sessions,
+                'override' => $override ? ['status' => $override->status, 'hours' => $override->manual_hours, 'note' => $override->note] : null,
+            ];
+        }
+
+        return response()->json([
+            'member' => ['id' => $user->id, 'name' => $user->name, 'employee_id' => $user->employee_id],
+            'year' => $year,
+            'month' => $month,
+            'month_name' => $startOfMonth->format('F'),
+            'days' => $days,
+            'summary' => [
+                'total_worked_hours' => round($totalWorkedHours, 2),
+                'present_days' => $presentDays,
+                'absent_days' => $absentDays,
+                'avg_hours_per_day' => $presentDays > 0 ? round($totalWorkedHours / $presentDays, 2) : 0,
+            ],
+        ]);
+    }
+
+    public function updateDayStatus(Request $request, $userId)
+    {
+        $request->validate([
+            'date' => 'required|date',
+            'status' => 'required|in:present,absent,week_off,half_day',
+            'manual_hours' => 'nullable|numeric|min:0|max:24',
+            'note' => 'nullable|string|max:255',
+        ]);
+
+        $user = User::findOrFail($userId);
+
+        AttendanceOverride::updateOrCreate(
+            ['user_id' => $user->id, 'date' => $request->date],
+            [
+                'tenant_id' => auth()->user()->tenant_id,
+                'status' => $request->status,
+                'manual_hours' => $request->manual_hours,
+                'note' => $request->note,
+                'marked_by' => auth()->id(),
+            ]
+        );
+
+        return response()->json(['status' => 'success']);
+    }
+
+    public function removeDayOverride(Request $request, $userId)
+    {
+        $request->validate(['date' => 'required|date']);
+
+        AttendanceOverride::where('user_id', $userId)
+            ->where('date', $request->date)
+            ->delete();
+
+        return response()->json(['status' => 'success']);
     }
 }

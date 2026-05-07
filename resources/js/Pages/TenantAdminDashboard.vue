@@ -2,6 +2,8 @@
 import { Head, router } from '@inertiajs/vue3';
 import { onMounted, ref, computed } from 'vue';
 import axios from 'axios';
+import { VueDatePicker } from '@vuepic/vue-datepicker';
+import '@vuepic/vue-datepicker/dist/main.css';
 
 const props = defineProps(['auth']);
 
@@ -264,6 +266,120 @@ async function saveEditMember() {
         closeEditMember();
         await fetchTeamData();
     } catch (e) {} finally { editLoading.value = false; }
+}
+
+// --- Member Profile & Attendance ---
+const viewMember = ref(null);
+const memberAttendance = ref(null);
+const memberAttLoading = ref(false);
+const attYear = ref(new Date().getFullYear());
+const attMonth = ref(new Date().getMonth() + 1);
+const dayEditOpen = ref(null);
+const dayEditForm = ref({ status: 'present', manual_hours: '', note: '' });
+const dayEditLoading = ref(false);
+
+const statusLabels = { present: 'Present', absent: 'Absent', week_off: 'Week Off', half_day: 'Half Day', weekend: 'Weekend', future: 'Future', na: 'N/A' };
+const statusDotColors = { present: 'bg-emerald-400', absent: 'bg-red-400', week_off: 'bg-violet-400', half_day: 'bg-amber-400', weekend: 'bg-surface-600', future: 'bg-surface-700', na: 'bg-surface-700' };
+
+// --- Member Bid Report ---
+const memberBidReport = ref(null);
+const bidReportLoading = ref(false);
+const bidReportFilter = ref('month');
+const bidReportDateRange = ref(null);
+const memberViewTab = ref('attendance');
+
+async function fetchMemberBidReport() {
+    bidReportLoading.value = true;
+    try {
+        const params = { filter: bidReportFilter.value };
+        if (bidReportFilter.value === 'range' && bidReportDateRange.value) {
+            const [from, to] = bidReportDateRange.value;
+            params.from = formatDateParam(from);
+            params.to = formatDateParam(to);
+        }
+        const { data } = await axios.get(`/api/admin/bidders/${viewMember.value.id}/bid-report`, { params });
+        memberBidReport.value = data;
+    } catch (e) {} finally { bidReportLoading.value = false; }
+}
+
+function formatDateParam(d) {
+    if (!d) return '';
+    const dt = new Date(d);
+    return dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0') + '-' + String(dt.getDate()).padStart(2, '0');
+}
+
+function changeBidReportFilter(f) {
+    bidReportFilter.value = f;
+    if (f !== 'range') fetchMemberBidReport();
+}
+
+function onDateRangeChange(val) {
+    bidReportDateRange.value = val;
+    if (val && val[0] && val[1]) fetchMemberBidReport();
+}
+
+async function openMemberProfile(bidder) {
+    viewMember.value = bidder;
+    memberViewTab.value = 'report';
+    attYear.value = new Date().getFullYear();
+    attMonth.value = new Date().getMonth() + 1;
+    bidReportFilter.value = 'month';
+    bidReportDateRange.value = null;
+    await Promise.all([fetchMemberAttendance(), fetchMemberBidReport()]);
+}
+
+function closeMemberProfile() {
+    viewMember.value = null;
+    memberAttendance.value = null;
+    dayEditOpen.value = null;
+}
+
+async function fetchMemberAttendance() {
+    memberAttLoading.value = true;
+    try {
+        const { data } = await axios.get(`/api/admin/bidders/${viewMember.value.id}/attendance`, {
+            params: { year: attYear.value, month: attMonth.value }
+        });
+        memberAttendance.value = data;
+    } catch (e) {} finally { memberAttLoading.value = false; }
+}
+
+function changeAttMonth(dir) {
+    attMonth.value += dir;
+    if (attMonth.value > 12) { attMonth.value = 1; attYear.value++; }
+    if (attMonth.value < 1) { attMonth.value = 12; attYear.value--; }
+    fetchMemberAttendance();
+}
+
+function openDayEdit(day) {
+    if (day.status === 'future' || day.status === 'na') return;
+    dayEditOpen.value = day.date;
+    dayEditForm.value = {
+        status: day.override?.status || day.status || 'present',
+        manual_hours: day.override?.hours ?? (day.hours || ''),
+        note: day.override?.note || '',
+    };
+}
+
+async function saveDayEdit() {
+    dayEditLoading.value = true;
+    try {
+        await axios.put(`/api/admin/bidders/${viewMember.value.id}/attendance`, {
+            date: dayEditOpen.value,
+            status: dayEditForm.value.status,
+            manual_hours: dayEditForm.value.manual_hours !== '' ? Number(dayEditForm.value.manual_hours) : null,
+            note: dayEditForm.value.note || null,
+        });
+        dayEditOpen.value = null;
+        await fetchMemberAttendance();
+    } catch (e) {} finally { dayEditLoading.value = false; }
+}
+
+async function removeDayOverride(date) {
+    try {
+        await axios.delete(`/api/admin/bidders/${viewMember.value.id}/attendance`, { data: { date } });
+        await fetchMemberAttendance();
+    } catch (e) {}
 }
 
 onMounted(async () => {
@@ -679,6 +795,287 @@ onMounted(async () => {
                     </div>
                 </Teleport>
 
+                <!-- Member Profile & Attendance Modal -->
+                <Teleport to="body">
+                    <div v-if="viewMember" class="fixed inset-0 z-[100] flex items-center justify-center p-4"
+                        @click.self="closeMemberProfile()">
+                        <div class="fixed inset-0 bg-black/60 backdrop-blur-sm"></div>
+                        <div class="relative bg-surface-900 border border-surface-700/50 rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col animate-slide-up">
+                            <!-- Modal Header -->
+                            <div class="flex items-center justify-between px-6 py-4 border-b border-surface-800/50 flex-shrink-0">
+                                <div class="flex items-center gap-3">
+                                    <div class="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold"
+                                        :class="getUserColor(viewMember.name)">
+                                        {{ viewMember.name.charAt(0).toUpperCase() }}
+                                    </div>
+                                    <div>
+                                        <h3 class="text-lg font-semibold text-surface-100">{{ viewMember.name }}</h3>
+                                        <p class="text-xs text-surface-500">{{ viewMember.employee_id || 'No ID' }} &middot; {{ viewMember.designation || 'Bidder' }}</p>
+                                    </div>
+                                </div>
+                                <button @click="closeMemberProfile()"
+                                    class="w-8 h-8 rounded-lg bg-surface-800/50 flex items-center justify-center text-surface-400 hover:text-surface-200 hover:bg-surface-800 transition-colors">
+                                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                                    </svg>
+                                </button>
+                            </div>
+
+                            <!-- Tab switcher -->
+                            <div class="px-6 pt-3 pb-0 flex gap-1 border-b border-surface-800/50 flex-shrink-0">
+                                <button @click="memberViewTab = 'report'"
+                                    :class="memberViewTab === 'report' ? 'text-brand border-brand' : 'text-surface-400 border-transparent hover:text-surface-200'"
+                                    class="px-4 py-2 text-xs font-medium border-b-2 -mb-px transition-colors">
+                                    Bid Report
+                                </button>
+                                <button @click="memberViewTab = 'attendance'"
+                                    :class="memberViewTab === 'attendance' ? 'text-brand border-brand' : 'text-surface-400 border-transparent hover:text-surface-200'"
+                                    class="px-4 py-2 text-xs font-medium border-b-2 -mb-px transition-colors">
+                                    Attendance
+                                </button>
+                            </div>
+
+                            <!-- Modal Body -->
+                            <div class="flex-1 overflow-y-auto px-6 py-5">
+                                <!-- Profile Info -->
+                                <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+                                    <div class="rounded-lg bg-surface-800/40 border border-surface-700/20 p-3 text-center">
+                                        <span class="text-[10px] text-surface-500 uppercase tracking-wider">Salary</span>
+                                        <p class="text-sm font-semibold text-surface-200 mt-1">{{ formatSalary(viewMember.salary) }}</p>
+                                    </div>
+                                    <div class="rounded-lg bg-surface-800/40 border border-surface-700/20 p-3 text-center">
+                                        <span class="text-[10px] text-surface-500 uppercase tracking-wider">Min Hours</span>
+                                        <p class="text-sm font-semibold text-surface-200 mt-1">{{ viewMember.min_hours_per_day }}h/day</p>
+                                    </div>
+                                    <div class="rounded-lg bg-surface-800/40 border border-surface-700/20 p-3 text-center">
+                                        <span class="text-[10px] text-surface-500 uppercase tracking-wider">Joined</span>
+                                        <p class="text-sm font-semibold text-surface-200 mt-1">{{ viewMember.joining_date || '-' }}</p>
+                                    </div>
+                                    <div class="rounded-lg bg-surface-800/40 border border-surface-700/20 p-3 text-center">
+                                        <span class="text-[10px] text-surface-500 uppercase tracking-wider">Total Bids</span>
+                                        <p class="text-sm font-semibold text-surface-200 mt-1">{{ viewMember.total_bids }}</p>
+                                    </div>
+                                </div>
+
+                                <!-- ===== BID REPORT TAB ===== -->
+                                <div v-show="memberViewTab === 'report'">
+                                    <!-- Filter bar -->
+                                    <div class="flex flex-wrap items-center gap-2 mb-4">
+                                        <button v-for="f in [{key:'today',label:'Today'},{key:'week',label:'This Week'},{key:'month',label:'This Month'},{key:'range',label:'Date Range'}]"
+                                            :key="f.key" @click="changeBidReportFilter(f.key)"
+                                            :class="bidReportFilter === f.key ? 'bg-brand/10 text-brand border-brand/30' : 'bg-surface-800/50 text-surface-400 border-surface-700/30 hover:text-surface-200'"
+                                            class="px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors">
+                                            {{ f.label }}
+                                        </button>
+                                    </div>
+                                    <!-- Date range picker -->
+                                    <div v-if="bidReportFilter === 'range'" class="mb-4 relative" style="z-index: 200;">
+                                        <VueDatePicker
+                                            v-model="bidReportDateRange"
+                                            range
+                                            :enable-time-picker="false"
+                                            :max-date="new Date()"
+                                            dark
+                                            auto-apply
+                                            placeholder="Select date range"
+                                            format="dd MMM yyyy"
+                                            @update:model-value="onDateRangeChange"
+                                            teleport="body"
+                                        />
+                                    </div>
+
+                                    <!-- Loading -->
+                                    <div v-if="bidReportLoading" class="flex items-center justify-center py-8">
+                                        <div class="w-6 h-6 border-2 border-brand/30 border-t-brand rounded-full animate-spin"></div>
+                                    </div>
+
+                                    <div v-else-if="memberBidReport">
+                                        <!-- Stats cards -->
+                                        <div class="grid grid-cols-5 gap-3 mb-5">
+                                            <div class="rounded-lg bg-surface-800/40 border border-surface-700/20 p-3 text-center">
+                                                <p class="text-xl font-bold text-surface-100">{{ memberBidReport.total }}</p>
+                                                <p class="text-[10px] text-surface-500">Applied</p>
+                                            </div>
+                                            <div class="rounded-lg bg-blue-500/5 border border-blue-500/20 p-3 text-center">
+                                                <p class="text-xl font-bold text-blue-400">{{ memberBidReport.status_counts.Submitted }}</p>
+                                                <p class="text-[10px] text-surface-500">Submitted</p>
+                                            </div>
+                                            <div class="rounded-lg bg-amber-500/5 border border-amber-500/20 p-3 text-center">
+                                                <p class="text-xl font-bold text-amber-400">{{ memberBidReport.status_counts.Interviewing }}</p>
+                                                <p class="text-[10px] text-surface-500">Responded</p>
+                                            </div>
+                                            <div class="rounded-lg bg-emerald-500/5 border border-emerald-500/20 p-3 text-center">
+                                                <p class="text-xl font-bold text-emerald-400">{{ memberBidReport.status_counts.Hired }}</p>
+                                                <p class="text-[10px] text-surface-500">Hired</p>
+                                            </div>
+                                            <div class="rounded-lg bg-red-500/5 border border-red-500/20 p-3 text-center">
+                                                <p class="text-xl font-bold text-red-400">{{ memberBidReport.status_counts.Rejected }}</p>
+                                                <p class="text-[10px] text-surface-500">Rejected</p>
+                                            </div>
+                                        </div>
+
+                                        <!-- Conversion bar -->
+                                        <div v-if="memberBidReport.total > 0" class="mb-5">
+                                            <div class="flex items-center justify-between mb-1.5">
+                                                <span class="text-xs text-surface-400">Conversion breakdown</span>
+                                                <span class="text-xs font-medium text-brand">{{ memberBidReport.total > 0 ? Math.round((memberBidReport.status_counts.Hired / memberBidReport.total) * 100) : 0 }}% hired</span>
+                                            </div>
+                                            <div class="h-2 rounded-full bg-surface-800 flex overflow-hidden">
+                                                <div class="h-full bg-blue-400 transition-all" :style="{ width: (memberBidReport.status_counts.Submitted / memberBidReport.total * 100) + '%' }"></div>
+                                                <div class="h-full bg-amber-400 transition-all" :style="{ width: (memberBidReport.status_counts.Interviewing / memberBidReport.total * 100) + '%' }"></div>
+                                                <div class="h-full bg-emerald-400 transition-all" :style="{ width: (memberBidReport.status_counts.Hired / memberBidReport.total * 100) + '%' }"></div>
+                                                <div class="h-full bg-red-400 transition-all" :style="{ width: (memberBidReport.status_counts.Rejected / memberBidReport.total * 100) + '%' }"></div>
+                                            </div>
+                                        </div>
+
+                                        <!-- Bids list -->
+                                        <div class="border border-surface-700/30 rounded-xl overflow-hidden">
+                                            <div class="px-4 py-2.5 bg-surface-800/30 border-b border-surface-700/30">
+                                                <span class="text-xs font-medium text-surface-400">Recent Bids ({{ memberBidReport.bids.length }})</span>
+                                            </div>
+                                            <div v-if="memberBidReport.bids.length === 0" class="px-4 py-8 text-center text-xs text-surface-500">
+                                                No bids in this period
+                                            </div>
+                                            <div v-else class="max-h-[240px] overflow-y-auto scrollbar-thin">
+                                                <div v-for="bid in memberBidReport.bids" :key="bid.bid_id"
+                                                    class="px-4 py-2.5 border-b border-surface-800/30 last:border-0 flex items-center justify-between hover:bg-surface-800/20 transition-colors">
+                                                    <div class="min-w-0 flex-1">
+                                                        <p class="text-xs font-medium text-surface-200 truncate">{{ bid.job_title || truncateUrl(bid.job_url) }}</p>
+                                                        <p class="text-[10px] text-surface-500 mt-0.5">{{ bid.platform_name }} &middot; {{ bid.connects_used }} connects &middot; {{ toLocalDate(bid.created_at) }}</p>
+                                                    </div>
+                                                    <span class="ml-3 text-[10px] font-medium px-2 py-0.5 rounded-md flex-shrink-0"
+                                                        :class="statusColors[bid.status]?.badge || 'bg-surface-700/50 text-surface-400'">
+                                                        {{ bid.status }}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- ===== ATTENDANCE TAB ===== -->
+                                <div v-show="memberViewTab === 'attendance'">
+                                <div class="border border-surface-700/30 rounded-xl overflow-hidden">
+                                    <!-- Month navigation -->
+                                    <div class="px-4 py-3 bg-surface-800/30 border-b border-surface-700/30 flex items-center justify-between">
+                                        <button @click="changeAttMonth(-1)" class="w-7 h-7 rounded-md bg-surface-700/50 flex items-center justify-center text-surface-400 hover:text-surface-200 hover:bg-surface-700 transition-colors">
+                                            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                                <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
+                                            </svg>
+                                        </button>
+                                        <span class="text-sm font-semibold text-surface-200">
+                                            {{ memberAttendance?.month_name || '' }} {{ attYear }}
+                                        </span>
+                                        <button @click="changeAttMonth(1)" class="w-7 h-7 rounded-md bg-surface-700/50 flex items-center justify-center text-surface-400 hover:text-surface-200 hover:bg-surface-700 transition-colors">
+                                            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                                <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+                                            </svg>
+                                        </button>
+                                    </div>
+
+                                    <!-- Loading -->
+                                    <div v-if="memberAttLoading" class="flex items-center justify-center py-12">
+                                        <div class="w-6 h-6 border-2 border-brand/30 border-t-brand rounded-full animate-spin"></div>
+                                    </div>
+
+                                    <!-- Attendance summary -->
+                                    <div v-else-if="memberAttendance" class="p-4">
+                                        <div class="grid grid-cols-4 gap-3 mb-4">
+                                            <div class="text-center">
+                                                <p class="text-lg font-bold text-emerald-400">{{ memberAttendance.summary.present_days }}</p>
+                                                <p class="text-[10px] text-surface-500">Present</p>
+                                            </div>
+                                            <div class="text-center">
+                                                <p class="text-lg font-bold text-red-400">{{ memberAttendance.summary.absent_days }}</p>
+                                                <p class="text-[10px] text-surface-500">Absent</p>
+                                            </div>
+                                            <div class="text-center">
+                                                <p class="text-lg font-bold text-surface-200">{{ memberAttendance.summary.total_worked_hours }}h</p>
+                                                <p class="text-[10px] text-surface-500">Total Hours</p>
+                                            </div>
+                                            <div class="text-center">
+                                                <p class="text-lg font-bold text-surface-200">{{ memberAttendance.summary.avg_hours_per_day }}h</p>
+                                                <p class="text-[10px] text-surface-500">Avg/Day</p>
+                                            </div>
+                                        </div>
+
+                                        <!-- Day grid -->
+                                        <div class="grid grid-cols-7 gap-1 mb-2">
+                                            <div v-for="d in ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']" :key="d"
+                                                class="text-center text-[10px] font-medium text-surface-500 py-1">{{ d }}</div>
+                                        </div>
+                                        <div class="grid grid-cols-7 gap-1">
+                                            <!-- Offset for first day of month -->
+                                            <div v-for="n in ((memberAttendance.days[0]?.day_name === 'Mon' ? 0 : memberAttendance.days[0]?.day_name === 'Tue' ? 1 : memberAttendance.days[0]?.day_name === 'Wed' ? 2 : memberAttendance.days[0]?.day_name === 'Thu' ? 3 : memberAttendance.days[0]?.day_name === 'Fri' ? 4 : memberAttendance.days[0]?.day_name === 'Sat' ? 5 : 6))" :key="'blank-'+n"></div>
+                                            <!-- Day cells -->
+                                            <div v-for="day in memberAttendance.days" :key="day.date"
+                                                @click="openDayEdit(day)"
+                                                class="relative rounded-lg p-1.5 text-center transition-all cursor-pointer border"
+                                                :class="[
+                                                    dayEditOpen === day.date ? 'border-brand ring-1 ring-brand/30' : 'border-transparent hover:border-surface-600',
+                                                    day.status === 'future' || day.status === 'na' ? 'opacity-30 cursor-default' : '',
+                                                    day.override ? 'ring-1 ring-violet-500/30' : ''
+                                                ]">
+                                                <p class="text-xs font-medium text-surface-300">{{ day.day }}</p>
+                                                <div class="w-2 h-2 rounded-full mx-auto mt-0.5" :class="statusDotColors[day.status] || 'bg-surface-700'"></div>
+                                                <p v-if="day.hours > 0" class="text-[9px] text-surface-500 mt-0.5">{{ day.hours }}h</p>
+                                            </div>
+                                        </div>
+
+                                        <!-- Legend -->
+                                        <div class="flex flex-wrap gap-3 mt-4 pt-3 border-t border-surface-800/30">
+                                            <div v-for="(label, key) in statusLabels" :key="key" class="flex items-center gap-1.5">
+                                                <div class="w-2 h-2 rounded-full" :class="statusDotColors[key]"></div>
+                                                <span class="text-[10px] text-surface-500">{{ label }}</span>
+                                            </div>
+                                        </div>
+
+                                        <!-- Day Edit Panel -->
+                                        <div v-if="dayEditOpen" class="mt-4 p-4 rounded-xl bg-surface-800/50 border border-surface-700/30">
+                                            <div class="flex items-center justify-between mb-3">
+                                                <h4 class="text-sm font-semibold text-surface-200">Edit: {{ dayEditOpen }}</h4>
+                                                <button @click="dayEditOpen = null" class="text-xs text-surface-500 hover:text-surface-300">&times; Close</button>
+                                            </div>
+                                            <div class="grid grid-cols-3 gap-3">
+                                                <div>
+                                                    <label class="block text-[10px] font-medium text-surface-500 mb-1">Status</label>
+                                                    <select v-model="dayEditForm.status" class="input-field w-full text-xs">
+                                                        <option value="present">Present</option>
+                                                        <option value="absent">Absent</option>
+                                                        <option value="week_off">Week Off</option>
+                                                        <option value="half_day">Half Day</option>
+                                                    </select>
+                                                </div>
+                                                <div>
+                                                    <label class="block text-[10px] font-medium text-surface-500 mb-1">Manual Hours</label>
+                                                    <input v-model="dayEditForm.manual_hours" type="number" min="0" max="24" step="0.5"
+                                                        class="input-field w-full text-xs" placeholder="Auto" />
+                                                </div>
+                                                <div>
+                                                    <label class="block text-[10px] font-medium text-surface-500 mb-1">Note</label>
+                                                    <input v-model="dayEditForm.note" type="text" maxlength="255"
+                                                        class="input-field w-full text-xs" placeholder="Optional" />
+                                                </div>
+                                            </div>
+                                            <div class="flex items-center gap-2 mt-3">
+                                                <button @click="saveDayEdit" :disabled="dayEditLoading"
+                                                    class="btn-primary text-xs px-4 py-1.5">
+                                                    {{ dayEditLoading ? 'Saving...' : 'Save' }}
+                                                </button>
+                                                <button @click="removeDayOverride(dayEditOpen)"
+                                                    class="btn-ghost text-xs text-red-400 hover:text-red-300 px-3 py-1.5">
+                                                    Remove Override
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </Teleport>
+
                 <!-- Bidders table -->
                 <div class="card overflow-hidden">
                     <div class="px-6 py-4 border-b border-surface-700/30 flex items-center justify-between">
@@ -764,6 +1161,11 @@ onMounted(async () => {
                                         {{ bidder.today_hours }}h
                                     </td>
                                     <td class="px-4 py-4 text-right space-x-1">
+                                        <button @click="openMemberProfile(bidder)"
+                                            class="btn-ghost text-xs text-surface-300 hover:text-surface-100"
+                                            title="View profile & attendance">
+                                            View
+                                        </button>
                                         <button @click="impersonateUser(bidder.id)"
                                             class="btn-ghost text-xs text-brand hover:text-brand/80"
                                             title="Login as this user">

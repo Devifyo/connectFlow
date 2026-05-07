@@ -104,6 +104,53 @@
     }
 }
 
+/* Vue Datepicker dark theme overrides */
+.dp__theme_dark {
+    --dp-background-color: #1e293b;
+    --dp-text-color: #e2e8f0;
+    --dp-hover-color: #334155;
+    --dp-hover-text-color: #f8fafc;
+    --dp-hover-icon-color: #94a3b8;
+    --dp-primary-color: #84cc16;
+    --dp-primary-disabled-color: #4d7c0f;
+    --dp-primary-text-color: #0f172a;
+    --dp-secondary-color: #475569;
+    --dp-border-color: #334155;
+    --dp-menu-border-color: #334155;
+    --dp-input-border-color: #475569;
+    --dp-input-background-color: #1e293b;
+    --dp-disabled-color: #1e293b;
+    --dp-disabled-color-text: #475569;
+    --dp-highlight-color: rgba(132, 204, 22, 0.1);
+    --dp-range-between-dates-background-color: rgba(132, 204, 22, 0.1);
+    --dp-range-between-dates-text-color: #e2e8f0;
+    --dp-range-between-border-color: rgba(132, 204, 22, 0.2);
+}
+
+.dp__input {
+    border-radius: 0.75rem !important;
+    padding: 0.625rem 1rem !important;
+    font-size: 0.8125rem !important;
+}
+
+.dp__input_icon_pad {
+    padding-left: 1rem !important;
+}
+
+.dp__input_icon {
+    display: none !important;
+}
+
+.dp__menu {
+    border-radius: 1rem !important;
+    box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.4), 0 8px 10px -6px rgb(0 0 0 / 0.3) !important;
+    z-index: 200 !important;
+}
+
+.dp__outer_menu_wrap {
+    z-index: 200 !important;
+}
+
 @layer utilities {
     .text-gradient {
         @apply bg-clip-text text-transparent bg-gradient-to-r from-brand-light to-brand;
