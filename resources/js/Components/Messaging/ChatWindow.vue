@@ -31,13 +31,19 @@ const ALLOWED_TYPES = [
     'application/vnd.ms-powerpoint', 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
     'text/plain', 'text/csv', 'application/zip',
 ];
-const MAX_FILE_SIZE = 25 * 1024 * 1024;
-const MAX_FILES = 10;
+const MAX_FILE_SIZE = 50 * 1024 * 1024;
+const MAX_FILES = 9;
 
 const canSend = computed(() => (body.value.trim() || selectedFiles.value.length > 0) && !sending.value);
 
-watch(() => messages.value.length, () => {
-    nextTick(() => scrollToBottom());
+watch(() => messages.value.length, (newLen, oldLen) => {
+    if (newLen > oldLen && isNearBottom()) {
+        nextTick(() => scrollToBottom());
+    }
+});
+
+watch(typingState, (val) => {
+    if (val) nextTick(() => scrollToBottom());
 });
 
 watch(activeConversation, () => {
@@ -46,6 +52,12 @@ watch(activeConversation, () => {
     filePreviews.value = [];
     nextTick(() => scrollToBottom());
 });
+
+function isNearBottom() {
+    if (!messagesContainer.value) return true;
+    const { scrollTop, scrollHeight, clientHeight } = messagesContainer.value;
+    return scrollHeight - scrollTop - clientHeight < 150;
+}
 
 function scrollToBottom() {
     if (messagesContainer.value) {
@@ -67,6 +79,7 @@ async function handleSend() {
         body.value = '';
         selectedFiles.value = [];
         filePreviews.value = [];
+        nextTick(() => scrollToBottom());
     } finally {
         sending.value = false;
     }
@@ -133,7 +146,7 @@ function loadMore() {
 }
 
 function handleScroll() {
-    if (messagesContainer.value?.scrollTop === 0) loadMore();
+    if (messagesContainer.value && messagesContainer.value.scrollTop < 80) loadMore();
 }
 
 function formatTime(dateStr) {
@@ -223,19 +236,10 @@ function videoAttachments(msg) {
 function docAttachments(msg) {
     return (msg.attachments || []).filter(a => a.type !== 'image' && a.type !== 'video');
 }
-
-function imageRows(images) {
-    const count = images.length;
-    if (count === 1) return [[images[0]]];
-    if (count === 2) return [[images[0], images[1]]];
-    if (count === 3) return [[images[0]], [images[1], images[2]]];
-    if (count === 4) return [[images[0], images[1]], [images[2], images[3]]];
-    const rows = [];
-    for (let i = 0; i < count; i += 3) {
-        rows.push(images.slice(i, i + 3));
-    }
-    return rows;
+function hasMedia(msg) {
+    return (msg.attachments || []).length > 0;
 }
+
 </script>
 
 <template>
@@ -348,116 +352,104 @@ function imageRows(images) {
 
                         <div class="relative group" :class="msg.user_id === currentUserId ? 'ml-auto' : ''">
 
-                            <!-- Image-only message (no bubble, clean collage) -->
-                            <template v-if="imageAttachments(msg).length && !msg.body && !videoAttachments(msg).length && !docAttachments(msg).length">
-                                <div class="rounded-2xl overflow-hidden" :class="isLastInGroup(i) ? (msg.user_id === currentUserId ? 'rounded-br-sm' : 'rounded-bl-sm') : ''">
-                                    <div class="flex flex-col gap-px" :style="{ maxWidth: imageAttachments(msg).length === 1 ? '280px' : '260px' }">
-                                        <div v-for="(row, ri) in imageRows(imageAttachments(msg))" :key="ri"
-                                            class="flex gap-px"
-                                            :style="{ height: imageAttachments(msg).length === 1 ? 'auto' : '120px' }"
-                                        >
-                                            <div v-for="att in row" :key="att.id"
-                                                class="relative overflow-hidden cursor-pointer flex-1 min-w-0 bg-surface-800"
-                                                :style="imageAttachments(msg).length === 1 ? { maxHeight: '260px' } : { height: '100%' }"
-                                                @click="lightboxUrl = att.url"
-                                            >
-                                                <div v-if="!att._loaded" class="absolute inset-0 flex items-center justify-center z-[1]">
-                                                    <div class="w-5 h-5 border-2 border-surface-500 border-t-transparent rounded-full animate-spin"></div>
-                                                </div>
-                                                <img :src="att.url" :alt="att.original_name" @load="att._loaded = true"
-                                                    class="w-full h-full object-cover hover:brightness-90 transition" loading="lazy" />
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                                <!-- Time overlaid at bottom-right -->
-                                <div class="flex items-center justify-end gap-1.5 mt-1">
-                                    <span class="text-[10px] text-surface-500">{{ formatTime(msg.created_at) }}</span>
-                                    <div v-if="msg.user_id === currentUserId" class="status-icon" :title="seenTooltip(msg)">
-                                        <svg v-if="messageStatus(msg) === 'seen'" class="w-3.5 h-3.5 text-blue-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                                            <path stroke-linecap="round" stroke-linejoin="round" d="M2.5 13l4 4L11 12.5"/>
-                                            <path stroke-linecap="round" stroke-linejoin="round" d="M8.5 13l4 4L21 8"/>
-                                        </svg>
-                                        <svg v-else class="w-3.5 h-3.5 text-surface-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                                            <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
-                                        </svg>
-                                    </div>
-                                </div>
-                            </template>
-
-                            <!-- Text message / mixed content (normal bubble) -->
-                            <template v-else>
-                                <div
-                                    class="text-sm leading-relaxed overflow-hidden"
-                                    :class="[
-                                        msg.user_id === currentUserId
-                                            ? 'bg-brand text-surface-950 rounded-2xl'
-                                            : 'bg-surface-800 text-surface-100 rounded-2xl',
-                                        msg.user_id === currentUserId
-                                            ? (isLastInGroup(i) ? 'rounded-br-sm' : '')
-                                            : (isLastInGroup(i) ? 'rounded-bl-sm' : ''),
-                                    ]"
+                            <!-- Single connected card for the whole message -->
+                            <div class="rounded-2xl overflow-hidden"
+                                :class="[
+                                    isLastInGroup(i)
+                                        ? (msg.user_id === currentUserId ? 'rounded-br-sm' : 'rounded-bl-sm')
+                                        : '',
+                                ]"
+                                :style="{ maxWidth: hasMedia(msg) ? '280px' : undefined }"
+                            >
+                                <!-- Text section -->
+                                <div v-if="msg.body"
+                                    class="px-4 py-2.5 text-sm leading-relaxed"
+                                    :class="msg.user_id === currentUserId
+                                        ? 'bg-brand text-surface-950'
+                                        : 'bg-surface-800 text-surface-100'"
                                 >
-                                    <p v-if="msg.body" class="whitespace-pre-wrap break-words px-4 pt-2.5" :class="msg.attachments?.length ? '' : 'pb-0'">{{ msg.body }}</p>
-
-                                    <!-- Inline images in mixed message -->
-                                    <div v-if="imageAttachments(msg).length" :class="msg.body ? 'mt-1' : ''" class="flex flex-col gap-px">
-                                        <div v-for="(row, ri) in imageRows(imageAttachments(msg))" :key="ri"
-                                            class="flex gap-px" style="height: 120px">
-                                            <div v-for="att in row" :key="att.id"
-                                                class="relative overflow-hidden cursor-pointer flex-1 min-w-0"
-                                                @click="lightboxUrl = att.url">
-                                                <div v-if="!att._loaded" class="absolute inset-0 flex items-center justify-center bg-surface-800/50 z-[1]">
-                                                    <div class="w-5 h-5 border-2 border-surface-500 border-t-transparent rounded-full animate-spin"></div>
-                                                </div>
-                                                <img :src="att.url" :alt="att.original_name" @load="att._loaded = true"
-                                                    class="w-full h-full object-cover hover:brightness-90 transition" loading="lazy" />
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    <!-- Videos -->
-                                    <div v-for="att in videoAttachments(msg)" :key="att.id" class="mt-1">
-                                        <video :src="att.url" controls class="w-full" preload="metadata"></video>
-                                    </div>
-
-                                    <!-- Documents -->
-                                    <div v-if="docAttachments(msg).length" class="space-y-1 py-1">
-                                        <a v-for="att in docAttachments(msg)" :key="att.id"
-                                            :href="att.url" target="_blank"
-                                            class="flex items-center gap-3 p-3 mx-2 rounded-xl transition-colors"
-                                            :class="msg.user_id === currentUserId ? 'bg-surface-950/15 hover:bg-surface-950/25' : 'bg-surface-700/50 hover:bg-surface-700'">
-                                            <div class="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 text-[10px] font-bold"
-                                                :class="msg.user_id === currentUserId ? 'bg-surface-950/20 text-surface-950' : 'bg-surface-600 text-surface-200'">
-                                                {{ fileIcon(att.mime_type) }}
-                                            </div>
-                                            <div class="min-w-0 flex-1">
-                                                <div class="text-xs font-medium truncate">{{ att.original_name }}</div>
-                                                <div class="text-[10px] opacity-60">{{ formatFileSize(att.size) }}</div>
-                                            </div>
-                                            <svg class="w-4 h-4 opacity-50 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                                                <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/>
-                                            </svg>
-                                        </a>
-                                    </div>
-
-                                    <!-- Time + status -->
-                                    <div class="flex items-center justify-end gap-1.5 mt-1 px-4 pb-2">
-                                        <span class="text-[10px] leading-none" :class="msg.user_id === currentUserId ? 'text-surface-950/50' : 'text-surface-500'">
-                                            {{ formatTime(msg.created_at) }}
-                                        </span>
+                                    <p class="whitespace-pre-wrap break-words">{{ msg.body }}</p>
+                                    <!-- Inline time for text-only messages -->
+                                    <div v-if="!hasMedia(msg)" class="flex items-center justify-end gap-1.5 mt-1 -mb-0.5">
+                                        <span class="text-[10px] leading-none" :class="msg.user_id === currentUserId ? 'text-surface-950/50' : 'text-surface-500'">{{ formatTime(msg.created_at) }}</span>
                                         <div v-if="msg.user_id === currentUserId" class="status-icon" :title="seenTooltip(msg)">
-                                            <svg v-if="messageStatus(msg) === 'seen'" class="w-4 h-4 text-blue-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                                                <path stroke-linecap="round" stroke-linejoin="round" d="M2.5 13l4 4L11 12.5"/>
-                                                <path stroke-linecap="round" stroke-linejoin="round" d="M8.5 13l4 4L21 8"/>
-                                            </svg>
-                                            <svg v-else class="w-4 h-4 text-surface-950/50" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                                                <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
-                                            </svg>
+                                            <svg v-if="messageStatus(msg) === 'seen'" class="w-4 h-4 text-blue-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M2.5 13l4 4L11 12.5"/><path stroke-linecap="round" stroke-linejoin="round" d="M8.5 13l4 4L21 8"/></svg>
+                                            <svg v-else class="w-4 h-4" :class="msg.user_id === currentUserId ? 'text-surface-950/50' : 'text-surface-500'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
                                         </div>
                                     </div>
                                 </div>
-                            </template>
+
+                                <!-- Images section (connected to text above) -->
+                                <div v-if="imageAttachments(msg).length" class="relative bg-surface-800">
+                                    <!-- Single image -->
+                                    <div v-if="imageAttachments(msg).length === 1"
+                                        class="cursor-pointer" style="min-height: 140px"
+                                        @click="lightboxUrl = imageAttachments(msg)[0].url">
+                                        <div v-if="!imageAttachments(msg)[0]._loaded" class="absolute inset-0 flex items-center justify-center z-[1]">
+                                            <div class="w-6 h-6 border-2 border-surface-500 border-t-transparent rounded-full animate-spin"></div>
+                                        </div>
+                                        <img :src="imageAttachments(msg)[0].url" :alt="imageAttachments(msg)[0].original_name"
+                                            @load="imageAttachments(msg)[0]._loaded = true"
+                                            class="w-full hover:brightness-90 transition" style="max-height: 360px"
+                                            loading="lazy" decoding="async" />
+                                    </div>
+                                    <!-- Multiple images grid -->
+                                    <div v-else class="grid gap-0.5"
+                                        :class="imageAttachments(msg).length === 2 ? 'grid-cols-2' : 'grid-cols-3'">
+                                        <div v-for="(att, idx) in imageAttachments(msg)" :key="att.id"
+                                            class="relative bg-surface-700 cursor-pointer overflow-hidden"
+                                            :class="[
+                                                imageAttachments(msg).length === 3 && idx === 0 ? 'col-span-3 aspect-[16/9]' : 'aspect-square',
+                                            ]"
+                                            @click="lightboxUrl = att.url">
+                                            <div v-if="!att._loaded" class="absolute inset-0 flex items-center justify-center z-[1]">
+                                                <div class="w-4 h-4 border-2 border-surface-500 border-t-transparent rounded-full animate-spin"></div>
+                                            </div>
+                                            <img :src="att.url" :alt="att.original_name" @load="att._loaded = true"
+                                                class="w-full h-full object-cover hover:brightness-90 transition" loading="lazy" decoding="async" />
+                                        </div>
+                                    </div>
+                                    <!-- Time overlaid on image -->
+                                    <div class="absolute bottom-1.5 right-2 flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-black/50 backdrop-blur-sm">
+                                        <span class="text-[10px] text-white/80">{{ formatTime(msg.created_at) }}</span>
+                                        <div v-if="msg.user_id === currentUserId" class="status-icon">
+                                            <svg v-if="messageStatus(msg) === 'seen'" class="w-3.5 h-3.5 text-blue-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M2.5 13l4 4L11 12.5"/><path stroke-linecap="round" stroke-linejoin="round" d="M8.5 13l4 4L21 8"/></svg>
+                                            <svg v-else class="w-3.5 h-3.5 text-white/60" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Videos section (connected) -->
+                                <div v-for="att in videoAttachments(msg)" :key="att.id" class="bg-surface-800">
+                                    <video :src="att.url" controls class="w-full" preload="none"></video>
+                                </div>
+
+                                <!-- Documents section (connected) -->
+                                <div v-if="docAttachments(msg).length" class="bg-surface-800">
+                                    <a v-for="att in docAttachments(msg)" :key="att.id"
+                                        :href="att.url" target="_blank"
+                                        class="flex items-center gap-3 p-3 transition-colors hover:bg-surface-700/50 border-t border-surface-700/30">
+                                        <div class="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 text-[10px] font-bold bg-surface-700 text-surface-300">
+                                            {{ fileIcon(att.mime_type) }}
+                                        </div>
+                                        <div class="min-w-0 flex-1">
+                                            <div class="text-xs font-medium text-surface-200 truncate">{{ att.original_name }}</div>
+                                            <div class="text-[10px] text-surface-500">{{ formatFileSize(att.size) }}</div>
+                                        </div>
+                                        <svg class="w-4 h-4 text-surface-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/>
+                                        </svg>
+                                    </a>
+                                    <!-- Time under documents if no images -->
+                                    <div v-if="!imageAttachments(msg).length" class="flex items-center justify-end gap-1.5 px-3 pb-2 pt-0.5">
+                                        <span class="text-[10px] text-surface-500">{{ formatTime(msg.created_at) }}</span>
+                                        <div v-if="msg.user_id === currentUserId" class="status-icon" :title="seenTooltip(msg)">
+                                            <svg v-if="messageStatus(msg) === 'seen'" class="w-3.5 h-3.5 text-blue-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M2.5 13l4 4L11 12.5"/><path stroke-linecap="round" stroke-linejoin="round" d="M8.5 13l4 4L21 8"/></svg>
+                                            <svg v-else class="w-3.5 h-3.5 text-surface-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
 
                             <!-- Hover tooltip -->
                             <div v-if="msg.user_id === currentUserId && messageStatus(msg)"

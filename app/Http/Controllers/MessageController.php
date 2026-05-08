@@ -124,7 +124,7 @@ class MessageController extends Controller
         $messages = $conversation->messages()
             ->with(['sender:id,name', 'attachments'])
             ->orderByDesc('created_at')
-            ->cursorPaginate(50);
+            ->cursorPaginate(30);
 
         return response()->json([
             ...$messages->toArray(),
@@ -136,8 +136,8 @@ class MessageController extends Controller
     {
         $request->validate([
             'body' => 'nullable|string|max:5000',
-            'attachments' => 'nullable|array|max:10',
-            'attachments.*' => 'file|max:25600|mimes:jpg,jpeg,png,gif,webp,svg,mp4,webm,mov,pdf,doc,docx,xls,xlsx,ppt,pptx,txt,zip,csv',
+            'attachments' => 'nullable|array|max:9',
+            'attachments.*' => 'file|max:51200|mimes:jpg,jpeg,png,gif,webp,svg,mp4,webm,mov,pdf,doc,docx,xls,xlsx,ppt,pptx,txt,zip,csv',
         ]);
 
         if (!$request->body && !$request->hasFile('attachments')) {
