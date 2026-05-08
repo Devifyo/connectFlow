@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch, nextTick, computed } from 'vue';
+import { ref, watch, nextTick, computed, onMounted, onUnmounted } from 'vue';
 import { useMessaging } from '@/composables/useMessaging';
 import { usePage } from '@inertiajs/vue3';
 import { vProtectedSrc } from '@/directives/protectedSrc';
@@ -10,7 +10,7 @@ const emit = defineEmits(['back']);
 const {
     activeConversation, messages, sendMessage, startConversation, loadingMessages,
     nextCursor, fetchMessages, fetchConversations, typingState, otherLastRead, emitTyping,
-    unreadFromIndex,
+    unreadFromIndex, totalUnread, onIncoming,
 } = useMessaging();
 
 const page = usePage();
@@ -27,6 +27,46 @@ const selectedFiles = ref([]);
 const filePreviews = ref([]);
 const isDragging = ref(false);
 const lightboxUrl = ref(null);
+const hasNewBelow = ref(false);
+
+const originalTitle = typeof document !== 'undefined' ? document.title : '';
+let titleFlashInterval = null;
+
+function startTitleFlash(count) {
+    stopTitleFlash();
+    let show = true;
+    titleFlashInterval = setInterval(() => {
+        document.title = show ? `(${count}) New message` : originalTitle;
+        show = !show;
+    }, 1000);
+}
+
+function stopTitleFlash() {
+    if (titleFlashInterval) {
+        clearInterval(titleFlashInterval);
+        titleFlashInterval = null;
+        document.title = originalTitle;
+    }
+}
+
+let removeIncomingHook = null;
+
+onMounted(() => {
+    document.addEventListener('visibilitychange', handleVisibility);
+    removeIncomingHook = onIncoming(() => {
+        startTitleFlash(totalUnread.value || 1);
+    });
+});
+
+onUnmounted(() => {
+    stopTitleFlash();
+    document.removeEventListener('visibilitychange', handleVisibility);
+    if (removeIncomingHook) removeIncomingHook();
+});
+
+function handleVisibility() {
+    if (!document.hidden) stopTitleFlash();
+}
 
 const ALLOWED_TYPES = [
     'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml',
@@ -62,6 +102,8 @@ watch(() => messages.value.length, (newLen, oldLen) => {
             });
         } else if (oldLen === 0 || isNearBottom()) {
             nextTick(() => scrollToBottom());
+        } else if (oldLen > 0) {
+            hasNewBelow.value = true;
         }
     }
 });
@@ -76,6 +118,7 @@ watch(activeConversation, () => {
     filePreviews.value = [];
     showUnreadBanner.value = false;
     fadingUnread.value = false;
+    hasNewBelow.value = false;
     clearTimeout(unreadDismissTimer);
 });
 
@@ -153,6 +196,12 @@ function handleKeydown(e) {
     }
 }
 
+function jumpToBottom() {
+    scrollToBottom();
+    hasNewBelow.value = false;
+    stopTitleFlash();
+}
+
 function handleInput() {
     dismissUnread();
     if (activeConversation.value?.id) {
@@ -209,6 +258,10 @@ function loadMore() {
 
 function handleScroll() {
     if (messagesContainer.value && messagesContainer.value.scrollTop < 80) loadMore();
+    if (isNearBottom()) {
+        hasNewBelow.value = false;
+        if (totalUnread.value === 0) stopTitleFlash();
+    }
 }
 
 function formatTime(dateStr) {
@@ -550,6 +603,24 @@ function hasMedia(msg) {
                     <p class="text-xs text-surface-600 mt-1">Send a message to start the conversation</p>
                 </div>
             </div>
+
+            <!-- New message indicator -->
+            <transition
+                enter-active-class="transition duration-300 ease-out"
+                enter-from-class="opacity-0 translate-y-4"
+                enter-to-class="opacity-100 translate-y-0"
+                leave-active-class="transition duration-200 ease-in"
+                leave-from-class="opacity-100 translate-y-0"
+                leave-to-class="opacity-0 translate-y-4"
+            >
+                <button v-if="hasNewBelow" @click="jumpToBottom"
+                    class="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 px-4 py-2 rounded-full bg-brand text-surface-950 text-xs font-semibold shadow-lg hover:bg-brand-light transition-colors active:scale-95">
+                    <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 13.5L12 21m0 0l-7.5-7.5M12 21V3"/>
+                    </svg>
+                    New message
+                </button>
+            </transition>
         </div>
 
         <!-- File previews strip -->

@@ -11,6 +11,7 @@ const loadingMessages = ref(false);
 const otherLastRead = ref(null);
 const typingState = ref(null);
 const unreadFromIndex = ref(-1);
+const onIncomingCallbacks = [];
 
 let typingTimeout = null;
 let sendTypingTimer = null;
@@ -191,23 +192,39 @@ export function useMessaging() {
             }
 
             playNotificationSound();
+            onIncomingCallbacks.forEach(cb => { try { cb(data); } catch {} });
         } catch {}
+    }
+
+    let audioCtx = null;
+
+    function getAudioContext() {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        return audioCtx;
     }
 
     function playNotificationSound() {
         try {
-            const ctx = new (window.AudioContext || window.webkitAudioContext)();
-            const osc = ctx.createOscillator();
-            const gain = ctx.createGain();
-            osc.connect(gain);
-            gain.connect(ctx.destination);
-            osc.frequency.setValueAtTime(880, ctx.currentTime);
-            osc.frequency.setValueAtTime(1100, ctx.currentTime + 0.1);
-            gain.gain.setValueAtTime(0.3, ctx.currentTime);
-            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
-            osc.start(ctx.currentTime);
-            osc.stop(ctx.currentTime + 0.3);
+            const ctx = getAudioContext();
+            if (ctx.state === 'suspended') {
+                ctx.resume().then(() => playBeep(ctx)).catch(() => {});
+                return;
+            }
+            playBeep(ctx);
         } catch {}
+    }
+
+    function playBeep(ctx) {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.frequency.setValueAtTime(880, ctx.currentTime);
+        osc.frequency.setValueAtTime(1100, ctx.currentTime + 0.1);
+        gain.gain.setValueAtTime(0.3, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
+        osc.start(ctx.currentTime);
+        osc.stop(ctx.currentTime + 0.3);
     }
 
     function onActivity() {
@@ -293,6 +310,11 @@ export function useMessaging() {
         heartbeatStarted = false;
     }
 
+    function onIncoming(cb) {
+        onIncomingCallbacks.push(cb);
+        return () => { const i = onIncomingCallbacks.indexOf(cb); if (i > -1) onIncomingCallbacks.splice(i, 1); };
+    }
+
     function openPanel() { isPanelOpen.value = true; }
     function closePanel() { isPanelOpen.value = false; activeConversation.value = null; typingState.value = null; }
     function togglePanel() { isPanelOpen.value = !isPanelOpen.value; }
@@ -317,6 +339,6 @@ export function useMessaging() {
         searchUsers, markRead, fetchUnreadCount, handleIncomingMessage,
         handleTypingEvent, handleReadEvent, handlePresenceEvent, emitTyping,
         startHeartbeat, stopHeartbeat,
-        openPanel, closePanel, togglePanel, setActiveConversation,
+        openPanel, closePanel, togglePanel, setActiveConversation, onIncoming,
     };
 }
