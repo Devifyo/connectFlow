@@ -11,7 +11,7 @@ services:
     environment:
       - APP_ENV=production
       - APP_DEBUG=false
-      - APP_URL=http://localhost:8009
+      - APP_URL=https://pitchflow.devifyo.cloud
       - APP_KEY=${APP_KEY}
       - DB_CONNECTION=mysql
       - DB_HOST=db
@@ -108,7 +108,7 @@ services:
     restart: unless-stopped
     environment:
       - PMA_HOST=db
-      - PMA_ABSOLUTE_URI=http://localhost:8009/dbase/
+      - PMA_ABSOLUTE_URI=https://pitchflow.devifyo.cloud/dbase/
     ports:
       - "8084:80"
     networks:
