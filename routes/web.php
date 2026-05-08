@@ -74,6 +74,12 @@ Route::middleware('auth')->group(function () {
     Route::get('/api/messages/conversations/{conversation}/messages', [\App\Http\Controllers\MessageController::class, 'messages']);
     Route::post('/api/messages/conversations/{conversation}/send', [\App\Http\Controllers\MessageController::class, 'send']);
     Route::post('/api/messages/conversations/{conversation}/read', [\App\Http\Controllers\MessageController::class, 'markRead']);
+    Route::post('/api/messages/conversations/{conversation}/typing', [\App\Http\Controllers\MessageController::class, 'typing']);
+    Route::get('/api/messages/attachments/{attachment}', [\App\Http\Controllers\MessageController::class, 'showAttachment']);
+
+    // Presence heartbeat
+    Route::post('/api/heartbeat', [\App\Http\Controllers\MessageController::class, 'heartbeat']);
+    Route::post('/api/go-offline', [\App\Http\Controllers\MessageController::class, 'goOffline']);
 
     // Super Admin Routes
     Route::middleware('role:SuperAdmin')->group(function () {

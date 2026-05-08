@@ -22,12 +22,12 @@ function handleBack() {
     <Teleport to="body">
         <Transition name="panel">
             <div v-if="isPanelOpen" class="fixed inset-0 z-50 flex justify-end">
-                <div class="absolute inset-0 bg-black/40 backdrop-blur-sm" @click="closePanel"></div>
+                <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" @click="closePanel"></div>
 
-                <div class="relative w-full sm:w-[480px] lg:w-[640px] h-full bg-surface-900 border-l border-surface-800/50 flex shadow-2xl">
+                <div class="relative w-full sm:w-[560px] lg:w-[780px] h-full bg-surface-900 border-l border-surface-800/50 flex shadow-2xl">
                     <!-- Conversation list -->
                     <div
-                        class="w-full sm:w-[220px] lg:w-[260px] border-r border-surface-800/50 flex flex-col flex-shrink-0"
+                        class="w-full sm:w-[260px] lg:w-[300px] border-r border-surface-800/50 flex flex-col flex-shrink-0"
                         :class="{ 'hidden sm:flex': activeConversation }"
                     >
                         <div class="h-14 px-4 flex items-center justify-between border-b border-surface-800/50 flex-shrink-0">
@@ -52,7 +52,7 @@ function handleBack() {
                     <!-- Close button (desktop) -->
                     <button
                         @click="closePanel"
-                        class="hidden sm:flex absolute top-3 right-3 w-7 h-7 rounded-lg bg-surface-800 hover:bg-surface-700 items-center justify-center text-surface-400 hover:text-surface-100 transition-colors z-10"
+                        class="hidden sm:flex absolute top-3 right-3 w-7 h-7 rounded-lg bg-surface-800/80 hover:bg-surface-700 items-center justify-center text-surface-400 hover:text-surface-100 transition-colors z-10"
                     >
                         <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>

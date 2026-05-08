@@ -17,4 +17,9 @@ class Message extends Model
     {
         return $this->belongsTo(User::class, 'user_id')->withoutGlobalScope(\App\Models\Scopes\TenantScope::class);
     }
+
+    public function attachments()
+    {
+        return $this->hasMany(MessageAttachment::class);
+    }
 }

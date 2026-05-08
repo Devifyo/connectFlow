@@ -68,6 +68,7 @@ export default {
                 'slide-down': 'slideDown 0.3s ease-out',
                 'scale-in': 'scaleIn 0.2s ease-out',
                 'pulse-soft': 'pulseSoft 3s ease-in-out infinite',
+                'badge-blink': 'badgeBlink 1.2s ease-in-out infinite',
             },
             keyframes: {
                 fadeIn: {
@@ -89,6 +90,10 @@ export default {
                 pulseSoft: {
                     '0%, 100%': { opacity: '1' },
                     '50%': { opacity: '0.7' },
+                },
+                badgeBlink: {
+                    '0%, 100%': { transform: 'scale(1)', opacity: '1' },
+                    '50%': { transform: 'scale(1.25)', opacity: '0.7' },
                 },
             },
         },

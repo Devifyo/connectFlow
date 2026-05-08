@@ -10,7 +10,7 @@ import '@vuepic/vue-datepicker/dist/main.css';
 
 const props = defineProps(['auth']);
 
-const { totalUnread, fetchUnreadCount, handleIncomingMessage, togglePanel } = useMessaging();
+const { totalUnread, fetchUnreadCount, handleIncomingMessage, handleTypingEvent, handleReadEvent, handlePresenceEvent, togglePanel, startHeartbeat } = useMessaging();
 
 const ready = ref(false);
 const activeTab = ref('pipeline');
@@ -392,8 +392,13 @@ onMounted(async () => {
     await Promise.all([fetchPipelineData(), fetchTeamData()]);
     loading.value = false;
     fetchUnreadCount();
+    startHeartbeat();
     if (props.auth.user?.id && window.Echo) {
-        window.Echo.private(`messages.${props.auth.user.id}`).listen('.message.sent', handleIncomingMessage);
+        window.Echo.private(`messages.${props.auth.user.id}`)
+            .listen('.message.sent', handleIncomingMessage)
+            .listen('.user.typing', handleTypingEvent)
+            .listen('.messages.read', handleReadEvent)
+            .listen('.user.presence', handlePresenceEvent);
     }
 });
 
@@ -457,7 +462,7 @@ onUnmounted(() => {
                 </div>
                 <button @click="togglePanel" class="mt-3 w-full btn-ghost text-xs justify-center relative">
                     Messages
-                    <span v-if="totalUnread > 0" class="ml-1.5 min-w-[18px] h-[18px] rounded-full bg-brand inline-flex items-center justify-center px-1">
+                    <span v-if="totalUnread > 0" class="ml-1.5 min-w-[18px] h-[18px] rounded-full bg-brand inline-flex items-center justify-center px-1 animate-badge-blink">
                         <span class="text-[9px] font-bold text-surface-950 leading-none">{{ totalUnread > 99 ? '99+' : totalUnread }}</span>
                     </span>
                 </button>
@@ -486,7 +491,7 @@ onUnmounted(() => {
                         <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M8.625 9.75a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375m-13.5 3.01c0 1.6 1.123 2.994 2.707 3.227 1.087.16 2.185.283 3.293.369V21l4.184-4.183a1.14 1.14 0 01.778-.332 48.294 48.294 0 005.83-.498c1.585-.233 2.708-1.626 2.708-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z"/>
                         </svg>
-                        <span v-if="totalUnread > 0" class="absolute -top-1 -right-1 min-w-[14px] h-[14px] rounded-full bg-brand flex items-center justify-center">
+                        <span v-if="totalUnread > 0" class="absolute -top-1 -right-1 min-w-[14px] h-[14px] rounded-full bg-brand flex items-center justify-center animate-badge-blink">
                             <span class="text-[8px] font-bold text-surface-950 leading-none">{{ totalUnread > 9 ? '9+' : totalUnread }}</span>
                         </span>
                     </button>
