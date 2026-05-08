@@ -356,6 +356,12 @@ function changeAttMonth(dir) {
     fetchMemberAttendance();
 }
 
+const selectedDaySessions = computed(() => {
+    if (!dayEditOpen.value || !memberAttendance.value) return [];
+    const day = memberAttendance.value.days.find(d => d.date === dayEditOpen.value);
+    return day?.sessions || [];
+});
+
 function openDayEdit(day) {
     if (day.status === 'future' || day.status === 'na') return;
     dayEditOpen.value = day.date;
@@ -1092,6 +1098,49 @@ onUnmounted(() => {
                                                     class="btn-ghost text-xs text-red-400 hover:text-red-300 px-3 py-1.5">
                                                     Remove Override
                                                 </button>
+                                            </div>
+
+                                            <!-- Sessions & Locations -->
+                                            <div v-if="selectedDaySessions.length > 0" class="mt-4 pt-3 border-t border-surface-700/30">
+                                                <p class="text-[10px] font-semibold text-surface-500 uppercase tracking-wider mb-2">Sessions</p>
+                                                <div class="space-y-3">
+                                                    <div v-for="(s, si) in selectedDaySessions" :key="si" class="p-3 rounded-lg bg-surface-900/50 border border-surface-700/20">
+                                                        <div class="flex items-center gap-3 text-xs">
+                                                            <span class="text-surface-500 w-3">{{ si + 1 }}.</span>
+                                                            <span class="font-mono text-emerald-400">{{ s.in ? new Date(s.in).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--' }}</span>
+                                                            <svg class="w-3 h-3 text-surface-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>
+                                                            <span class="font-mono" :class="s.out ? 'text-red-400' : 'text-emerald-400'">{{ s.out ? new Date(s.out).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Active' }}</span>
+                                                            <span class="text-surface-500 ml-auto">{{ s.hours }}h</span>
+                                                        </div>
+                                                        <!-- Punch In Location -->
+                                                        <div v-if="s.in_location" class="mt-2 flex items-start gap-2">
+                                                            <span class="text-[9px] font-semibold text-emerald-400/70 uppercase w-6 flex-shrink-0 pt-0.5">IN</span>
+                                                            <div class="flex-1 min-w-0">
+                                                                <p class="text-[10px] text-surface-400 leading-relaxed truncate" :title="s.in_location.address">{{ s.in_location.address || `${s.in_location.lat}, ${s.in_location.lng}` }}</p>
+                                                                <a :href="`https://www.google.com/maps?q=${s.in_location.lat},${s.in_location.lng}`" target="_blank"
+                                                                    class="inline-flex items-center gap-1 text-[9px] text-brand hover:underline mt-0.5">
+                                                                    <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1 1 15 0Z"/></svg>
+                                                                    View on map
+                                                                </a>
+                                                            </div>
+                                                        </div>
+                                                        <!-- Punch Out Location -->
+                                                        <div v-if="s.out_location" class="mt-1.5 flex items-start gap-2">
+                                                            <span class="text-[9px] font-semibold text-red-400/70 uppercase w-6 flex-shrink-0 pt-0.5">OUT</span>
+                                                            <div class="flex-1 min-w-0">
+                                                                <p class="text-[10px] text-surface-400 leading-relaxed truncate" :title="s.out_location.address">{{ s.out_location.address || `${s.out_location.lat}, ${s.out_location.lng}` }}</p>
+                                                                <a :href="`https://www.google.com/maps?q=${s.out_location.lat},${s.out_location.lng}`" target="_blank"
+                                                                    class="inline-flex items-center gap-1 text-[9px] text-brand hover:underline mt-0.5">
+                                                                    <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1 1 15 0Z"/></svg>
+                                                                    View on map
+                                                                </a>
+                                                            </div>
+                                                        </div>
+                                                        <div v-if="!s.in_location && !s.out_location" class="mt-1.5">
+                                                            <p class="text-[10px] text-surface-600 italic">No location data</p>
+                                                        </div>
+                                                    </div>
+                                                </div>
                                             </div>
                                         </div>
                                     </div>

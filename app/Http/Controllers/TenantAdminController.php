@@ -367,6 +367,8 @@ class TenantAdminController extends Controller
                     'in' => $l->login_time?->toIso8601String(),
                     'out' => $l->logout_time?->toIso8601String(),
                     'hours' => round($hours, 2),
+                    'in_location' => $l->punch_in_lat ? ['lat' => (float) $l->punch_in_lat, 'lng' => (float) $l->punch_in_lng, 'address' => $l->punch_in_address] : null,
+                    'out_location' => $l->punch_out_lat ? ['lat' => (float) $l->punch_out_lat, 'lng' => (float) $l->punch_out_lng, 'address' => $l->punch_out_address] : null,
                 ];
             })->values();
 

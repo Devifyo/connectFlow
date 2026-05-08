@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue';
 import { Head, router } from '@inertiajs/vue3';
 import PitchFlowLogo from '@/Components/PitchFlowLogo.vue';
 import MessagingPanel from '@/Components/Messaging/MessagingPanel.vue';
@@ -28,6 +28,14 @@ const punchedInAt = ref(null);
 const elapsedSeconds = ref(0);
 const todayHours = ref(0);
 let clockInterval = null;
+
+const showPunchModal = ref(false);
+const punchLocation = ref(null);
+const punchLocationError = ref('');
+const punchLocationDenied = ref(false);
+const punchLoading = ref(false);
+const punchLocating = ref(false);
+const punchMapRef = ref(null);
 
 const formattedElapsed = computed(() => {
     const h = Math.floor(elapsedSeconds.value / 3600);
@@ -67,23 +75,83 @@ async function fetchTimeStatus() {
     } catch (e) {}
 }
 
-async function togglePunch() {
+function openPunchModal() {
+    punchLocation.value = null;
+    punchLocationError.value = '';
+    punchLocationDenied.value = false;
+    punchLoading.value = false;
+    showPunchModal.value = true;
+    requestLocation();
+}
+
+function requestLocation() {
+    if (!navigator.geolocation) {
+        punchLocationError.value = 'Geolocation is not supported by your browser.';
+        return;
+    }
+    punchLocating.value = true;
+    punchLocationError.value = '';
+    navigator.geolocation.getCurrentPosition(
+        async (pos) => {
+            const lat = pos.coords.latitude;
+            const lng = pos.coords.longitude;
+            let address = '';
+            try {
+                const resp = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&addressdetails=1`, {
+                    headers: { 'Accept-Language': 'en' },
+                });
+                const geo = await resp.json();
+                address = geo.display_name || '';
+            } catch {}
+            punchLocation.value = { lat, lng, address };
+            punchLocating.value = false;
+            initPunchMap(lat, lng);
+        },
+        (err) => {
+            punchLocating.value = false;
+            if (err.code === 1) punchLocationError.value = 'Location permission denied. Please allow location access to punch in/out.';
+            else if (err.code === 2) punchLocationError.value = 'Location unavailable. Please try again.';
+            else punchLocationError.value = 'Location request timed out. Please try again.';
+        },
+        { enableHighAccuracy: true, timeout: 15000 }
+    );
+}
+
+function initPunchMap(lat, lng) {
+    nextTick(() => {
+        const container = punchMapRef.value;
+        if (!container) return;
+        container.innerHTML = `<iframe width="100%" height="100%" frameborder="0" style="border:0;border-radius:12px;" src="https://www.openstreetmap.org/export/embed.html?bbox=${lng - 0.005},${lat - 0.003},${lng + 0.005},${lat + 0.003}&layer=mapnik&marker=${lat},${lng}" allowfullscreen></iframe>`;
+    });
+}
+
+async function confirmPunch() {
+    if (!punchLocation.value || punchLoading.value) return;
+    punchLoading.value = true;
     try {
+        const payload = {
+            latitude: punchLocation.value.lat,
+            longitude: punchLocation.value.lng,
+            address: punchLocation.value.address,
+        };
         if (isPunchedIn.value) {
-            await axios.post('/api/time/punch-out');
+            await axios.post('/api/time/punch-out', payload);
             isPunchedIn.value = false;
             punchedInAt.value = null;
             stopClock();
             elapsedSeconds.value = 0;
             fetchTimeStatus();
         } else {
-            const { data } = await axios.post('/api/time/punch-in');
+            const { data } = await axios.post('/api/time/punch-in', payload);
             isPunchedIn.value = true;
             punchedInAt.value = data.punched_in_at || data.log?.login_time;
             startClock(punchedInAt.value);
         }
+        showPunchModal.value = false;
     } catch (e) {
-        console.error(e);
+        punchLocationError.value = e.response?.data?.error || 'Something went wrong. Please try again.';
+    } finally {
+        punchLoading.value = false;
     }
 }
 
@@ -538,7 +606,7 @@ onUnmounted(() => {
                     </div>
 
                     <button
-                        @click="togglePunch"
+                        @click="openPunchModal"
                         class="px-4 py-2 rounded-lg text-xs font-semibold transition-all duration-200"
                         :class="isPunchedIn
                             ? 'bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/15'
@@ -1039,19 +1107,31 @@ onUnmounted(() => {
                                 <!-- Expanded session detail -->
                                 <tr v-if="expandedDay === day.date && day.sessions.length > 0">
                                     <td colspan="6" class="px-4 py-0">
-                                        <div class="py-3 pl-10 space-y-2 border-b border-surface-800/20">
-                                            <div v-for="(session, i) in day.sessions" :key="i" class="flex items-center gap-4 text-xs">
-                                                <span class="text-surface-500 w-4">{{ i + 1 }}.</span>
-                                                <span class="font-mono text-surface-300">
-                                                    {{ toLocalTimeShort(session.in) || '--' }}
-                                                </span>
-                                                <svg class="w-3 h-3 text-surface-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                                                    <path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                                                </svg>
-                                                <span class="font-mono" :class="session.out ? 'text-surface-300' : 'text-emerald-400'">
-                                                    {{ session.out ? toLocalTimeShort(session.out) : 'Active now' }}
-                                                </span>
-                                                <span class="text-surface-500 ml-auto">{{ formatHours(session.hours) }}</span>
+                                        <div class="py-3 pl-10 space-y-3 border-b border-surface-800/20">
+                                            <div v-for="(session, i) in day.sessions" :key="i">
+                                                <div class="flex items-center gap-4 text-xs">
+                                                    <span class="text-surface-500 w-4">{{ i + 1 }}.</span>
+                                                    <span class="font-mono text-surface-300">
+                                                        {{ toLocalTimeShort(session.in) || '--' }}
+                                                    </span>
+                                                    <svg class="w-3 h-3 text-surface-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                                        <path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                                                    </svg>
+                                                    <span class="font-mono" :class="session.out ? 'text-surface-300' : 'text-emerald-400'">
+                                                        {{ session.out ? toLocalTimeShort(session.out) : 'Active now' }}
+                                                    </span>
+                                                    <span class="text-surface-500 ml-auto">{{ formatHours(session.hours) }}</span>
+                                                </div>
+                                                <div v-if="session.in_location || session.out_location" class="ml-8 mt-1 space-y-1">
+                                                    <div v-if="session.in_location" class="flex items-center gap-1.5 text-[10px] text-surface-500">
+                                                        <svg class="w-3 h-3 text-emerald-500/60 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1 1 15 0Z"/></svg>
+                                                        <span class="truncate">In: {{ session.in_location.address || `${session.in_location.lat}, ${session.in_location.lng}` }}</span>
+                                                    </div>
+                                                    <div v-if="session.out_location" class="flex items-center gap-1.5 text-[10px] text-surface-500">
+                                                        <svg class="w-3 h-3 text-red-500/60 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1 1 15 0Z"/></svg>
+                                                        <span class="truncate">Out: {{ session.out_location.address || `${session.out_location.lat}, ${session.out_location.lng}` }}</span>
+                                                    </div>
+                                                </div>
                                             </div>
                                         </div>
                                     </td>
@@ -1310,6 +1390,97 @@ onUnmounted(() => {
                             class="px-5 py-2 text-sm font-medium bg-brand hover:bg-brand-light disabled:opacity-40 text-surface-950 rounded-xl transition-colors flex items-center gap-2">
                             <div v-if="savingPassword" class="w-3.5 h-3.5 border-2 border-surface-950/30 border-t-surface-950 rounded-full animate-spin"></div>
                             Update Password
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </Teleport>
+
+        <!-- Punch In/Out Modal -->
+        <Teleport to="body">
+            <div v-if="showPunchModal" class="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 backdrop-blur-sm" @click.self="showPunchModal = false">
+                <div class="bg-surface-900 border border-surface-700/50 rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
+                    <!-- Header -->
+                    <div class="px-6 py-4 border-b border-surface-800/50 flex items-center justify-between">
+                        <div>
+                            <h3 class="text-base font-semibold text-surface-100">{{ isPunchedIn ? 'Punch Out' : 'Punch In' }}</h3>
+                            <p class="text-xs text-surface-500 mt-0.5">Confirm your location to {{ isPunchedIn ? 'end' : 'start' }} your shift</p>
+                        </div>
+                        <button @click="showPunchModal = false" class="text-surface-500 hover:text-surface-300 transition-colors">
+                            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+                            </svg>
+                        </button>
+                    </div>
+
+                    <!-- Body -->
+                    <div class="px-6 py-5">
+                        <!-- Locating spinner -->
+                        <div v-if="punchLocating" class="flex flex-col items-center gap-3 py-8">
+                            <div class="w-10 h-10 border-3 border-surface-600 border-t-brand rounded-full animate-spin"></div>
+                            <p class="text-sm text-surface-400">Detecting your location...</p>
+                        </div>
+
+                        <!-- Error state -->
+                        <div v-else-if="punchLocationError" class="text-center py-6">
+                            <div class="w-12 h-12 rounded-full bg-red-500/10 flex items-center justify-center mx-auto mb-3">
+                                <svg class="w-6 h-6 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/>
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1 1 15 0Z"/>
+                                </svg>
+                            </div>
+                            <p class="text-sm text-red-400 mb-4">{{ punchLocationError }}</p>
+                            <button @click="requestLocation" class="btn-secondary text-xs px-4 py-2">
+                                Try Again
+                            </button>
+                        </div>
+
+                        <!-- Location found -->
+                        <div v-else-if="punchLocation">
+                            <!-- Map -->
+                            <div ref="punchMapRef" class="w-full h-48 rounded-xl bg-surface-800 overflow-hidden mb-4"></div>
+
+                            <!-- Address -->
+                            <div class="flex items-start gap-3 p-3 rounded-xl bg-surface-800/50 border border-surface-700/30">
+                                <svg class="w-5 h-5 text-brand flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/>
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1 1 15 0Z"/>
+                                </svg>
+                                <div class="min-w-0 flex-1">
+                                    <p class="text-xs font-medium text-surface-300">Your Location</p>
+                                    <p class="text-[11px] text-surface-500 mt-0.5 leading-relaxed">{{ punchLocation.address || `${punchLocation.lat.toFixed(5)}, ${punchLocation.lng.toFixed(5)}` }}</p>
+                                </div>
+                            </div>
+
+                            <!-- Current time -->
+                            <div class="flex items-center gap-3 mt-3 p-3 rounded-xl bg-surface-800/50 border border-surface-700/30">
+                                <svg class="w-5 h-5 text-surface-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/>
+                                </svg>
+                                <div>
+                                    <p class="text-xs font-medium text-surface-300">{{ isPunchedIn ? 'Shift Duration' : 'Current Time' }}</p>
+                                    <p class="text-[11px] text-surface-500 mt-0.5">{{ isPunchedIn ? formattedElapsed : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Footer -->
+                    <div class="px-6 py-4 border-t border-surface-800/50 flex items-center justify-end gap-3">
+                        <button @click="showPunchModal = false" class="btn-ghost text-xs px-4 py-2">Cancel</button>
+                        <button
+                            @click="confirmPunch"
+                            :disabled="!punchLocation || punchLoading"
+                            class="px-5 py-2.5 rounded-xl text-xs font-semibold transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed"
+                            :class="isPunchedIn
+                                ? 'bg-red-500 text-white hover:bg-red-600 active:scale-95'
+                                : 'bg-brand text-surface-950 hover:bg-brand-light active:scale-95'"
+                        >
+                            <span v-if="punchLoading" class="flex items-center gap-2">
+                                <div class="w-3.5 h-3.5 border-2 border-current/30 border-t-current rounded-full animate-spin"></div>
+                                Processing...
+                            </span>
+                            <span v-else>{{ isPunchedIn ? 'Confirm Punch Out' : 'Confirm Punch In' }}</span>
                         </button>
                     </div>
                 </div>

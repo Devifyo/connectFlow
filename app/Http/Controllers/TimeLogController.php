@@ -10,6 +10,12 @@ class TimeLogController extends Controller
 {
     public function punchIn(Request $request)
     {
+        $request->validate([
+            'latitude' => 'required|numeric|between:-90,90',
+            'longitude' => 'required|numeric|between:-180,180',
+            'address' => 'nullable|string|max:500',
+        ]);
+
         $activeShift = TimeLog::where('user_id', auth()->id())
             ->whereNull('logout_time')
             ->first();
@@ -25,6 +31,9 @@ class TimeLogController extends Controller
             'user_id' => auth()->id(),
             'login_time' => $now,
             'date' => $now->toDateString(),
+            'punch_in_lat' => $request->latitude,
+            'punch_in_lng' => $request->longitude,
+            'punch_in_address' => $request->address,
         ]);
 
         return response()->json([
@@ -36,6 +45,12 @@ class TimeLogController extends Controller
 
     public function punchOut(Request $request)
     {
+        $request->validate([
+            'latitude' => 'required|numeric|between:-90,90',
+            'longitude' => 'required|numeric|between:-180,180',
+            'address' => 'nullable|string|max:500',
+        ]);
+
         $log = TimeLog::where('user_id', auth()->id())
             ->whereNull('logout_time')
             ->latest('login_time')
@@ -51,6 +66,9 @@ class TimeLogController extends Controller
         $log->update([
             'logout_time' => $now,
             'total_hours' => round($totalHours, 4),
+            'punch_out_lat' => $request->latitude,
+            'punch_out_lng' => $request->longitude,
+            'punch_out_address' => $request->address,
         ]);
 
         return response()->json([
@@ -146,6 +164,8 @@ class TimeLogController extends Controller
                     'in' => $l->login_time?->toIso8601String(),
                     'out' => $l->logout_time?->toIso8601String(),
                     'hours' => round($hours, 2),
+                    'in_location' => $l->punch_in_lat ? ['lat' => (float) $l->punch_in_lat, 'lng' => (float) $l->punch_in_lng, 'address' => $l->punch_in_address] : null,
+                    'out_location' => $l->punch_out_lat ? ['lat' => (float) $l->punch_out_lat, 'lng' => (float) $l->punch_out_lng, 'address' => $l->punch_out_address] : null,
                 ];
             })->values();
 

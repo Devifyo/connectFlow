@@ -14,6 +14,10 @@ class TimeLog extends Model
         'logout_time' => 'datetime',
         'date' => 'date',
         'total_hours' => 'decimal:4',
+        'punch_in_lat' => 'decimal:7',
+        'punch_in_lng' => 'decimal:7',
+        'punch_out_lat' => 'decimal:7',
+        'punch_out_lng' => 'decimal:7',
     ];
 
     protected static function booted(): void
