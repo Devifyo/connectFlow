@@ -5,6 +5,11 @@ import PitchFlowLogo from '@/Components/PitchFlowLogo.vue';
 import MessagingPanel from '@/Components/Messaging/MessagingPanel.vue';
 import { useMessaging } from '@/composables/useMessaging';
 import axios from 'axios';
+import { VueDatePicker } from '@vuepic/vue-datepicker';
+import '@vuepic/vue-datepicker/dist/main.css';
+import { VueTelInput } from 'vue-tel-input';
+import 'vue-tel-input/vue-tel-input.css';
+import { vProtectedSrc } from '@/directives/protectedSrc';
 
 const props = defineProps(['auth', 'impersonating']);
 
@@ -342,10 +347,140 @@ function switchTab(tab) {
     }
 }
 
+// --- Profile ---
+const profileData = ref(null);
+const showProfileModal = ref(false);
+const profileTab = ref('profile');
+const profileForm = ref({ name: '', address: '', higher_education: '', date_of_birth: null, phone_country_code: '', phone_number: '' });
+const phoneInput = ref('');
+const profilePicFile = ref(null);
+const profilePicPreview = ref(null);
+const savingProfile = ref(false);
+const profileSuccess = ref(false);
+const profileErrors = ref({});
+const passwordForm = ref({ current_password: '', password: '', password_confirmation: '' });
+const savingPassword = ref(false);
+const passwordError = ref('');
+const passwordSuccess = ref(false);
+
+const telInputOptions = { mode: 'international', preferredCountries: ['IN', 'US', 'GB', 'AE', 'CA', 'AU'], defaultCountry: 'IN' };
+const telDropdownOptions = { showDialCodeInSelection: true, showFlags: true, showSearchBox: true };
+
+async function fetchProfile() {
+    try {
+        const { data } = await axios.get('/api/profile');
+        profileData.value = data;
+    } catch {}
+}
+
+async function openProfileModal() {
+    if (!profileData.value) return;
+    const dob = profileData.value.date_of_birth ? new Date(profileData.value.date_of_birth + 'T00:00:00') : null;
+    profileForm.value = {
+        name: profileData.value.name || '',
+        address: profileData.value.address || '',
+        higher_education: profileData.value.higher_education || '',
+        date_of_birth: dob,
+        phone_country_code: profileData.value.phone_country_code || '',
+        phone_number: profileData.value.phone_number || '',
+    };
+    phoneInput.value = profileData.value.phone_country_code && profileData.value.phone_number
+        ? profileData.value.phone_country_code + profileData.value.phone_number
+        : '';
+    profilePicFile.value = null;
+    profilePicPreview.value = null;
+    if (profileData.value.profile_picture_url) {
+        try {
+            const res = await fetch(profileData.value.profile_picture_url, {
+                headers: { 'X-PF-Token': document.head.querySelector('meta[name="csrf-token"]')?.content || '1' },
+                credentials: 'same-origin',
+            });
+            if (res.ok) {
+                const buf = await res.arrayBuffer();
+                const blob = new Blob([buf], { type: res.headers.get('content-type') || 'image/jpeg' });
+                profilePicPreview.value = URL.createObjectURL(blob);
+            }
+        } catch {}
+    }
+    profileTab.value = 'profile';
+    passwordForm.value = { current_password: '', password: '', password_confirmation: '' };
+    passwordError.value = '';
+    passwordSuccess.value = false;
+    showProfileModal.value = true;
+}
+
+function handleProfilePic(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    profilePicFile.value = file;
+    const reader = new FileReader();
+    reader.onload = (ev) => profilePicPreview.value = ev.target.result;
+    reader.readAsDataURL(file);
+}
+
+function onPhoneInput(phone, phoneObject) {
+    if (phoneObject?.countryCallingCode) {
+        profileForm.value.phone_country_code = '+' + phoneObject.countryCallingCode;
+    }
+    if (phoneObject?.nationalNumber) {
+        profileForm.value.phone_number = phoneObject.nationalNumber;
+    }
+}
+
+function formatDateStr(d) {
+    if (!d) return '';
+    const dt = new Date(d);
+    return dt.getFullYear() + '-' + String(dt.getMonth()+1).padStart(2,'0') + '-' + String(dt.getDate()).padStart(2,'0');
+}
+
+async function saveProfile() {
+    profileErrors.value = {};
+    const errs = {};
+    if (!profileForm.value.name?.trim()) errs.name = 'Name is required';
+    if (!profileForm.value.phone_number?.trim()) errs.phone_number = 'Phone number is required';
+    if (!profileForm.value.address?.trim()) errs.address = 'Address is required';
+    if (!profileForm.value.higher_education) errs.higher_education = 'Education is required';
+    if (!profilePicFile.value && !profileData.value?.profile_picture_url) errs.profile_picture = 'Profile picture is required';
+    if (Object.keys(errs).length) { profileErrors.value = errs; return; }
+    savingProfile.value = true;
+    profileSuccess.value = false;
+    try {
+        const fd = new FormData();
+        fd.append('name', profileForm.value.name);
+        fd.append('address', profileForm.value.address);
+        fd.append('higher_education', profileForm.value.higher_education);
+        if (profileForm.value.date_of_birth) fd.append('date_of_birth', formatDateStr(profileForm.value.date_of_birth));
+        fd.append('phone_country_code', profileForm.value.phone_country_code);
+        fd.append('phone_number', profileForm.value.phone_number);
+        if (profilePicFile.value) fd.append('profile_picture', profilePicFile.value);
+
+        await axios.post('/api/profile', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+        await fetchProfile();
+        profileSuccess.value = true;
+        setTimeout(() => { profileSuccess.value = false; }, 3000);
+    } catch {}
+    savingProfile.value = false;
+}
+
+async function savePassword() {
+    savingPassword.value = true;
+    passwordError.value = '';
+    passwordSuccess.value = false;
+    try {
+        await axios.post('/api/profile/password', passwordForm.value);
+        passwordSuccess.value = true;
+        passwordForm.value = { current_password: '', password: '', password_confirmation: '' };
+    } catch (e) {
+        passwordError.value = e.response?.data?.message || 'Failed to update password';
+    }
+    savingPassword.value = false;
+}
+
 // --- Lifecycle ---
 onMounted(() => {
     fetchTimeStatus();
     fetchBids();
+    fetchProfile();
     fetchUnreadCount();
     startHeartbeat();
     if (props.auth.user?.id && window.Echo) {
@@ -420,7 +555,16 @@ onUnmounted(() => {
                             <span class="text-[9px] font-bold text-surface-950 leading-none">{{ totalUnread > 99 ? '99+' : totalUnread }}</span>
                         </span>
                     </button>
-                    <span class="text-sm text-surface-400 hidden md:block">{{ auth.user.name }}</span>
+                    <!-- Profile avatar -->
+                    <button @click="openProfileModal" class="relative flex items-center gap-2 px-2 py-1 rounded-lg hover:bg-surface-800/50 transition-colors">
+                        <div v-if="profileData?.profile_picture_url" class="w-7 h-7 rounded-full overflow-hidden ring-1 ring-surface-700">
+                            <img v-protected-src="profileData.profile_picture_url" class="w-full h-full object-cover" draggable="false" @contextmenu.prevent />
+                        </div>
+                        <div v-else class="w-7 h-7 rounded-full bg-surface-800 ring-1 ring-surface-700 flex items-center justify-center">
+                            <span class="text-[10px] font-bold text-surface-400">{{ auth.user.name?.split(' ').map(w => w[0]).join('').toUpperCase().slice(0,2) }}</span>
+                        </div>
+                        <span class="text-sm text-surface-400 hidden md:block">{{ auth.user.name }}</span>
+                    </button>
                     <button @click="router.post('/logout')" class="btn-ghost text-xs">Sign out</button>
                 </div>
             </div>
@@ -445,6 +589,54 @@ onUnmounted(() => {
                 <div class="stat-card">
                     <span class="text-xs font-medium text-surface-400 uppercase tracking-wider">Hours Today</span>
                     <span class="text-xl font-semibold text-surface-100 mt-1 font-mono">{{ Math.abs(todayHours).toFixed(1) }}h</span>
+                </div>
+            </div>
+
+            <!-- Profile Completion -->
+            <div v-if="profileData && profileData.completion.percentage < 100"
+                class="mb-6 rounded-2xl bg-surface-900 border border-surface-800/50 p-5">
+                <div class="flex items-center gap-4">
+                    <!-- Avatar -->
+                    <div class="relative cursor-pointer" @click="openProfileModal">
+                        <div v-if="profileData.profile_picture_url"
+                            class="w-14 h-14 rounded-full overflow-hidden ring-2 ring-brand/30">
+                            <img v-protected-src="profileData.profile_picture_url" class="w-full h-full object-cover" draggable="false" @contextmenu.prevent />
+                        </div>
+                        <div v-else class="w-14 h-14 rounded-full bg-surface-800 flex items-center justify-center ring-2 ring-surface-700">
+                            <svg class="w-6 h-6 text-surface-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z"/>
+                            </svg>
+                        </div>
+                    </div>
+                    <!-- Info -->
+                    <div class="flex-1 min-w-0">
+                        <div class="flex items-center gap-3 mb-2">
+                            <h3 class="text-sm font-semibold text-surface-100">Complete your profile</h3>
+                            <span class="text-xs font-medium px-2 py-0.5 rounded-full"
+                                :class="profileData.completion.percentage >= 70 ? 'bg-emerald-500/15 text-emerald-400' : profileData.completion.percentage >= 40 ? 'bg-amber-500/15 text-amber-400' : 'bg-red-500/15 text-red-400'">
+                                {{ profileData.completion.percentage }}%
+                            </span>
+                        </div>
+                        <!-- Progress bar -->
+                        <div class="w-full h-1.5 bg-surface-800 rounded-full overflow-hidden mb-2">
+                            <div class="h-full rounded-full transition-all duration-500"
+                                :class="profileData.completion.percentage >= 70 ? 'bg-emerald-500' : profileData.completion.percentage >= 40 ? 'bg-amber-500' : 'bg-red-500'"
+                                :style="{ width: profileData.completion.percentage + '%' }"></div>
+                        </div>
+                        <!-- Missing fields -->
+                        <div class="flex flex-wrap gap-1.5">
+                            <span v-for="(done, field) in profileData.completion.fields" :key="field"
+                                class="text-[10px] px-2 py-0.5 rounded-full"
+                                :class="done ? 'bg-emerald-500/10 text-emerald-400' : 'bg-surface-800 text-surface-500'">
+                                {{ field === 'profile_picture' ? 'Photo' : field === 'higher_education' ? 'Education' : field === 'date_of_birth' ? 'DOB' : field === 'phone_number' ? 'Phone' : field.charAt(0).toUpperCase() + field.slice(1) }}
+                            </span>
+                        </div>
+                    </div>
+                    <!-- Edit button -->
+                    <button @click="openProfileModal"
+                        class="px-4 py-2 text-sm font-medium bg-brand hover:bg-brand-light text-surface-950 rounded-xl transition-colors flex-shrink-0">
+                        Complete
+                    </button>
                 </div>
             </div>
 
@@ -960,5 +1152,226 @@ onUnmounted(() => {
             </div>
         </main>
         <MessagingPanel />
+
+        <!-- Profile Edit Modal -->
+        <Teleport to="body">
+            <div v-if="showProfileModal" class="fixed inset-0 z-[90] flex items-center justify-center bg-black/60 backdrop-blur-sm" @click.self="showProfileModal = false">
+                <div class="w-full max-w-lg mx-4 bg-surface-900 border border-surface-800/50 rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
+                    <!-- Header -->
+                    <div class="px-6 py-4 border-b border-surface-800/50 flex items-center justify-between flex-shrink-0">
+                        <h2 class="text-base font-semibold text-surface-100">My Profile</h2>
+                        <button @click="showProfileModal = false" class="text-surface-400 hover:text-surface-200 transition-colors">
+                            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+                        </button>
+                    </div>
+                    <!-- Tabs -->
+                    <div class="px-6 pt-3 flex gap-1 border-b border-surface-800/50 flex-shrink-0">
+                        <button @click="profileTab = 'profile'"
+                            class="px-4 py-2 text-sm font-medium rounded-t-lg transition-colors relative"
+                            :class="profileTab === 'profile' ? 'text-surface-100 bg-surface-800/50' : 'text-surface-400 hover:text-surface-300'">
+                            Profile
+                            <div v-if="profileTab === 'profile'" class="absolute bottom-0 left-0 right-0 h-0.5 bg-brand rounded-full"></div>
+                        </button>
+                        <button @click="profileTab = 'password'"
+                            class="px-4 py-2 text-sm font-medium rounded-t-lg transition-colors relative"
+                            :class="profileTab === 'password' ? 'text-surface-100 bg-surface-800/50' : 'text-surface-400 hover:text-surface-300'">
+                            Password
+                            <div v-if="profileTab === 'password'" class="absolute bottom-0 left-0 right-0 h-0.5 bg-brand rounded-full"></div>
+                        </button>
+                    </div>
+                    <!-- Profile Tab -->
+                    <div v-show="profileTab === 'profile'" class="px-6 py-5 space-y-5 overflow-y-auto flex-1 scrollbar-thin">
+                        <div v-if="profileSuccess" class="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-sm text-emerald-400">Profile updated successfully!</div>
+                        <!-- Profile picture -->
+                        <div class="flex items-center gap-4">
+                            <div class="relative">
+                                <div v-if="profilePicPreview" class="w-20 h-20 rounded-full overflow-hidden ring-2 ring-brand/30">
+                                    <img :src="profilePicPreview" class="w-full h-full object-cover" draggable="false" @contextmenu.prevent @load="e => { if (e.target.src.startsWith('blob:')) URL.revokeObjectURL(e.target.src); }" />
+                                </div>
+                                <div v-else class="w-20 h-20 rounded-full bg-surface-800 flex items-center justify-center ring-2" :class="profileErrors.profile_picture ? 'ring-red-500/50' : 'ring-surface-700'">
+                                    <svg class="w-8 h-8 text-surface-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z"/>
+                                    </svg>
+                                </div>
+                            </div>
+                            <div>
+                                <label class="px-3 py-1.5 text-xs font-medium bg-surface-800 hover:bg-surface-700 text-surface-300 rounded-lg cursor-pointer transition-colors inline-block">
+                                    Upload Photo *
+                                    <input type="file" accept="image/*" class="hidden" @change="handleProfilePic" />
+                                </label>
+                                <p class="text-[10px] text-surface-500 mt-1.5">Max 5MB, JPG/PNG</p>
+                                <p v-if="profileErrors.profile_picture" class="text-[10px] text-red-400 mt-0.5">{{ profileErrors.profile_picture }}</p>
+                            </div>
+                        </div>
+                        <!-- Name -->
+                        <div>
+                            <label class="text-xs font-medium text-surface-400 mb-1.5 block">Full Name *</label>
+                            <input v-model="profileForm.name" type="text"
+                                class="w-full px-3.5 py-2.5 text-sm bg-surface-800/60 border rounded-xl text-surface-100 placeholder-surface-500 focus:outline-none transition-colors"
+                                :class="profileErrors.name ? 'border-red-500/50 focus:border-red-500/70' : 'border-surface-700/30 focus:border-brand/50'" />
+                            <p v-if="profileErrors.name" class="text-[10px] text-red-400 mt-1">{{ profileErrors.name }}</p>
+                        </div>
+                        <!-- Email (read-only) -->
+                        <div>
+                            <label class="text-xs font-medium text-surface-400 mb-1.5 block">Email</label>
+                            <input :value="profileData?.email" type="email" disabled
+                                class="w-full px-3.5 py-2.5 text-sm bg-surface-800/30 border border-surface-700/20 rounded-xl text-surface-500 cursor-not-allowed" />
+                        </div>
+                        <!-- Designation (read-only, managed by admin) -->
+                        <div>
+                            <label class="text-xs font-medium text-surface-400 mb-1.5 block">Designation</label>
+                            <input :value="profileData?.designation || '—'" type="text" disabled
+                                class="w-full px-3.5 py-2.5 text-sm bg-surface-800/30 border border-surface-700/20 rounded-xl text-surface-500 cursor-not-allowed" />
+                        </div>
+                        <!-- Phone with flags -->
+                        <div>
+                            <label class="text-xs font-medium text-surface-400 mb-1.5 block">Phone Number *</label>
+                            <VueTelInput
+                                v-model="phoneInput"
+                                @on-input="onPhoneInput"
+                                :inputOptions="telInputOptions"
+                                :dropdownOptions="telDropdownOptions"
+                                class="profile-tel-input"
+                            />
+                            <p v-if="profileErrors.phone_number" class="text-[10px] text-red-400 mt-1">{{ profileErrors.phone_number }}</p>
+                        </div>
+                        <!-- Date of Birth -->
+                        <div>
+                            <label class="text-xs font-medium text-surface-400 mb-1.5 block">Date of Birth</label>
+                            <VueDatePicker
+                                v-model="profileForm.date_of_birth"
+                                :enable-time-picker="false"
+                                :max-date="new Date()"
+                                :year-range="[1950, new Date().getFullYear()]"
+                                auto-apply
+                                dark
+                                :teleport="true"
+                                placeholder="Select date"
+                            />
+                        </div>
+                        <!-- Address -->
+                        <div>
+                            <label class="text-xs font-medium text-surface-400 mb-1.5 block">Address *</label>
+                            <textarea v-model="profileForm.address" rows="2" placeholder="Your address"
+                                class="w-full px-3.5 py-2.5 text-sm bg-surface-800/60 border rounded-xl text-surface-100 placeholder-surface-500 focus:outline-none resize-none transition-colors"
+                                :class="profileErrors.address ? 'border-red-500/50 focus:border-red-500/70' : 'border-surface-700/30 focus:border-brand/50'"></textarea>
+                            <p v-if="profileErrors.address" class="text-[10px] text-red-400 mt-1">{{ profileErrors.address }}</p>
+                        </div>
+                        <!-- Higher Education -->
+                        <div>
+                            <label class="text-xs font-medium text-surface-400 mb-1.5 block">Highest Education *</label>
+                            <select v-model="profileForm.higher_education"
+                                class="w-full px-3.5 py-2.5 text-sm bg-surface-800/60 border rounded-xl text-surface-100 focus:outline-none transition-colors"
+                                :class="profileErrors.higher_education ? 'border-red-500/50 focus:border-red-500/70' : 'border-surface-700/30 focus:border-brand/50'">
+                                <option value="">Select</option>
+                                <option value="High School">High School</option>
+                                <option value="Diploma">Diploma</option>
+                                <option value="Bachelor's">Bachelor's</option>
+                                <option value="Master's">Master's</option>
+                                <option value="PhD">PhD</option>
+                                <option value="Other">Other</option>
+                            </select>
+                            <p v-if="profileErrors.higher_education" class="text-[10px] text-red-400 mt-1">{{ profileErrors.higher_education }}</p>
+                        </div>
+                    </div>
+                    <!-- Password Tab -->
+                    <div v-show="profileTab === 'password'" class="px-6 py-5 space-y-5 overflow-y-auto flex-1 scrollbar-thin">
+                        <div v-if="passwordSuccess" class="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-sm text-emerald-400">
+                            Password updated successfully.
+                        </div>
+                        <div v-if="passwordError" class="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-sm text-red-400">
+                            {{ passwordError }}
+                        </div>
+                        <div>
+                            <label class="text-xs font-medium text-surface-400 mb-1.5 block">Current Password</label>
+                            <input v-model="passwordForm.current_password" type="password" placeholder="Enter current password"
+                                class="w-full px-3.5 py-2.5 text-sm bg-surface-800/60 border border-surface-700/30 rounded-xl text-surface-100 placeholder-surface-500 focus:outline-none focus:border-brand/50 transition-colors" />
+                        </div>
+                        <div>
+                            <label class="text-xs font-medium text-surface-400 mb-1.5 block">New Password</label>
+                            <input v-model="passwordForm.password" type="password" placeholder="Enter new password"
+                                class="w-full px-3.5 py-2.5 text-sm bg-surface-800/60 border border-surface-700/30 rounded-xl text-surface-100 placeholder-surface-500 focus:outline-none focus:border-brand/50 transition-colors" />
+                        </div>
+                        <div>
+                            <label class="text-xs font-medium text-surface-400 mb-1.5 block">Confirm New Password</label>
+                            <input v-model="passwordForm.password_confirmation" type="password" placeholder="Confirm new password"
+                                class="w-full px-3.5 py-2.5 text-sm bg-surface-800/60 border border-surface-700/30 rounded-xl text-surface-100 placeholder-surface-500 focus:outline-none focus:border-brand/50 transition-colors" />
+                        </div>
+                    </div>
+                    <!-- Footer -->
+                    <div class="px-6 py-4 border-t border-surface-800/50 flex items-center justify-end gap-3 flex-shrink-0">
+                        <button @click="showProfileModal = false" class="px-4 py-2 text-sm font-medium text-surface-400 hover:text-surface-200 transition-colors">Cancel</button>
+                        <button v-if="profileTab === 'profile'" @click="saveProfile" :disabled="savingProfile || !profileForm.name.trim()"
+                            class="px-5 py-2 text-sm font-medium bg-brand hover:bg-brand-light disabled:opacity-40 text-surface-950 rounded-xl transition-colors flex items-center gap-2">
+                            <div v-if="savingProfile" class="w-3.5 h-3.5 border-2 border-surface-950/30 border-t-surface-950 rounded-full animate-spin"></div>
+                            Save Profile
+                        </button>
+                        <button v-else @click="savePassword" :disabled="savingPassword || !passwordForm.current_password || !passwordForm.password || !passwordForm.password_confirmation"
+                            class="px-5 py-2 text-sm font-medium bg-brand hover:bg-brand-light disabled:opacity-40 text-surface-950 rounded-xl transition-colors flex items-center gap-2">
+                            <div v-if="savingPassword" class="w-3.5 h-3.5 border-2 border-surface-950/30 border-t-surface-950 rounded-full animate-spin"></div>
+                            Update Password
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </Teleport>
     </div>
 </template>
+
+<style scoped>
+:deep(.profile-tel-input .vti__input) {
+    background: rgba(30, 30, 40, 0.6) !important;
+    border: 1px solid rgba(60, 60, 80, 0.3) !important;
+    border-radius: 0.75rem !important;
+    color: #e2e8f0 !important;
+    font-size: 0.875rem !important;
+    padding: 0.625rem 0.875rem !important;
+}
+:deep(.profile-tel-input .vti__dropdown) {
+    background: rgba(30, 30, 40, 0.6) !important;
+    border: 1px solid rgba(60, 60, 80, 0.3) !important;
+    border-radius: 0.75rem 0 0 0.75rem !important;
+}
+:deep(.profile-tel-input .vti__dropdown-list) {
+    background: #1a1a2e !important;
+    border: 1px solid rgba(60, 60, 80, 0.5) !important;
+    border-radius: 0.75rem !important;
+    z-index: 100 !important;
+}
+:deep(.profile-tel-input .vti__dropdown-item) {
+    color: #e2e8f0 !important;
+}
+:deep(.profile-tel-input .vti__dropdown-item:hover),
+:deep(.profile-tel-input .vti__dropdown-item.highlighted) {
+    background: rgba(60, 60, 80, 0.5) !important;
+}
+:deep(.profile-tel-input .vti__search_box) {
+    background: rgba(30, 30, 40, 0.8) !important;
+    border: 1px solid rgba(60, 60, 80, 0.3) !important;
+    color: #e2e8f0 !important;
+    border-radius: 0.5rem !important;
+    margin: 0.5rem !important;
+}
+:deep(.vue-tel-input) {
+    border: none !important;
+    background: transparent !important;
+    border-radius: 0.75rem !important;
+}
+:deep(.vue-tel-input:focus-within) {
+    box-shadow: none !important;
+}
+:deep(.dp__theme_dark) {
+    --dp-background-color: #1a1a2e;
+    --dp-text-color: #e2e8f0;
+    --dp-hover-color: rgba(60, 60, 80, 0.5);
+    --dp-primary-color: var(--color-brand, #6366f1);
+    --dp-border-color: rgba(60, 60, 80, 0.3);
+    --dp-menu-border-color: rgba(60, 60, 80, 0.5);
+    --dp-input-background-color: rgba(30, 30, 40, 0.6);
+}
+:deep(.dp__input) {
+    border-radius: 0.75rem !important;
+    font-size: 0.875rem !important;
+    padding: 0.625rem 0.875rem !important;
+}
+</style>

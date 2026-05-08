@@ -10,6 +10,7 @@ const nextCursor = ref(null);
 const loadingMessages = ref(false);
 const otherLastRead = ref(null);
 const typingState = ref(null);
+const unreadFromIndex = ref(-1);
 
 let typingTimeout = null;
 let sendTypingTimer = null;
@@ -301,6 +302,7 @@ export function useMessaging() {
         nextCursor.value = null;
         typingState.value = null;
         messages.value = [];
+        unreadFromIndex.value = conv?.unread > 0 ? conv.unread : -1;
         otherLastRead.value = conv?.other_last_read || null;
         if (conv?.id) {
             fetchMessages(conv.id);
@@ -310,7 +312,7 @@ export function useMessaging() {
 
     return {
         conversations, activeConversation, messages, totalUnread, isPanelOpen,
-        loadingMessages, nextCursor, typingState, otherLastRead,
+        loadingMessages, nextCursor, typingState, otherLastRead, unreadFromIndex,
         fetchConversations, fetchMessages, sendMessage, startConversation,
         searchUsers, markRead, fetchUnreadCount, handleIncomingMessage,
         handleTypingEvent, handleReadEvent, handlePresenceEvent, emitTyping,

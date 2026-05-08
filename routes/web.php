@@ -77,6 +77,12 @@ Route::middleware('auth')->group(function () {
     Route::post('/api/messages/conversations/{conversation}/typing', [\App\Http\Controllers\MessageController::class, 'typing']);
     Route::get('/api/messages/attachments/{attachment}', [\App\Http\Controllers\MessageController::class, 'showAttachment']);
 
+    // Profile API
+    Route::get('/api/profile', [ProfileController::class, 'apiGet']);
+    Route::post('/api/profile', [ProfileController::class, 'apiUpdate']);
+    Route::get('/api/profile/picture/{token}', [ProfileController::class, 'showPicture'])->where('token', '[0-9a-zA-Z]{6}');
+    Route::post('/api/profile/password', [ProfileController::class, 'updatePassword']);
+
     // Presence heartbeat
     Route::post('/api/heartbeat', [\App\Http\Controllers\MessageController::class, 'heartbeat']);
     Route::post('/api/go-offline', [\App\Http\Controllers\MessageController::class, 'goOffline']);

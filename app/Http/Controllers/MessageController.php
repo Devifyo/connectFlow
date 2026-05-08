@@ -43,6 +43,7 @@ class MessageController extends Controller
                     'user' => $other ? [
                         'id' => $other->id,
                         'name' => $other->name,
+                        'profile_picture_url' => $other->profile_picture_url,
                         'presence_status' => $this->resolvePresence($other),
                         'last_active_at' => $other->last_active_at?->toIso8601String(),
                     ] : null,
@@ -74,7 +75,7 @@ class MessageController extends Controller
         $users = User::where('id', '!=', $user->id)
             ->where('is_active', true)
             ->where('name', 'like', "%{$query}%")
-            ->select('id', 'name', 'designation')
+            ->select('id', 'name', 'designation', 'profile_picture')
             ->limit(10)
             ->get();
 
@@ -122,7 +123,7 @@ class MessageController extends Controller
         $otherLastRead = $otherParticipant?->pivot?->last_read_at;
 
         $messages = $conversation->messages()
-            ->with(['sender:id,name', 'attachments'])
+            ->with(['sender:id,name,profile_picture', 'attachments'])
             ->orderByDesc('created_at')
             ->cursorPaginate(30);
 
@@ -164,7 +165,7 @@ class MessageController extends Controller
             'last_read_at' => now(),
         ]);
 
-        $message->load('sender:id,name', 'attachments');
+        $message->load('sender:id,name,profile_picture', 'attachments');
 
         try {
             broadcast(new NewMessage($message));
@@ -189,7 +190,15 @@ class MessageController extends Controller
             abort(404);
         }
 
-        return $disk->response($attachment->stored_path, $attachment->original_name);
+        $etag = md5($attachment->stored_path . $attachment->updated_at);
+        if (request()->header('If-None-Match') === '"' . $etag . '"') {
+            return response('', 304);
+        }
+
+        return $disk->response($attachment->stored_path, $attachment->original_name, [
+            'Cache-Control' => 'private, max-age=31536000, immutable',
+            'ETag' => '"' . $etag . '"',
+        ]);
     }
 
     private function storeAttachment($message, $file): void

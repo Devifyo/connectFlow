@@ -2,12 +2,15 @@
 import { ref, watch, nextTick, computed } from 'vue';
 import { useMessaging } from '@/composables/useMessaging';
 import { usePage } from '@inertiajs/vue3';
+import { vProtectedSrc } from '@/directives/protectedSrc';
+import { vLazySrc } from '@/directives/lazySrc';
 
 const emit = defineEmits(['back']);
 
 const {
     activeConversation, messages, sendMessage, startConversation, loadingMessages,
     nextCursor, fetchMessages, fetchConversations, typingState, otherLastRead, emitTyping,
+    unreadFromIndex,
 } = useMessaging();
 
 const page = usePage();
@@ -16,6 +19,9 @@ const currentUserId = computed(() => page.props.auth.user?.id);
 const body = ref('');
 const sending = ref(false);
 const messagesContainer = ref(null);
+const showUnreadBanner = ref(false);
+const fadingUnread = ref(false);
+let unreadDismissTimer = null;
 const fileInputRef = ref(null);
 const selectedFiles = ref([]);
 const filePreviews = ref([]);
@@ -36,21 +42,41 @@ const MAX_FILES = 9;
 
 const canSend = computed(() => (body.value.trim() || selectedFiles.value.length > 0) && !sending.value);
 
+const unreadDividerIndex = computed(() => {
+    if (unreadFromIndex.value <= 0) return -1;
+    const idx = messages.value.length - unreadFromIndex.value;
+    return idx >= 0 ? idx : 0;
+});
+
 watch(() => messages.value.length, (newLen, oldLen) => {
-    if (newLen > oldLen && isNearBottom()) {
-        nextTick(() => scrollToBottom());
+    if (newLen > oldLen) {
+        if (unreadFromIndex.value > 0 && oldLen === 0) {
+            showUnreadBanner.value = true;
+            fadingUnread.value = false;
+            nextTick(() => {
+                requestAnimationFrame(() => {
+                    requestAnimationFrame(() => {
+                        scrollToUnread();
+                    });
+                });
+            });
+        } else if (oldLen === 0 || isNearBottom()) {
+            nextTick(() => scrollToBottom());
+        }
     }
 });
 
 watch(typingState, (val) => {
-    if (val) nextTick(() => scrollToBottom());
+    if (val && isNearBottom()) nextTick(() => scrollToBottom());
 });
 
 watch(activeConversation, () => {
     body.value = '';
     selectedFiles.value = [];
     filePreviews.value = [];
-    nextTick(() => scrollToBottom());
+    showUnreadBanner.value = false;
+    fadingUnread.value = false;
+    clearTimeout(unreadDismissTimer);
 });
 
 function isNearBottom() {
@@ -65,8 +91,43 @@ function scrollToBottom() {
     }
 }
 
+function scrollToUnread() {
+    const container = messagesContainer.value;
+    if (!container) return;
+
+    const idx = unreadDividerIndex.value;
+    const msg = messages.value[idx];
+    if (!msg) { scrollToBottom(); return; }
+
+    const el = document.getElementById('msg-' + msg.id);
+    if (!el) { scrollToBottom(); return; }
+
+    el.scrollIntoView({ block: 'center', behavior: 'instant' });
+
+    unreadDismissTimer = setTimeout(() => {
+        fadingUnread.value = true;
+        setTimeout(() => {
+            showUnreadBanner.value = false;
+            fadingUnread.value = false;
+            unreadFromIndex.value = -1;
+        }, 500);
+    }, 4000);
+}
+
+function dismissUnread() {
+    if (!showUnreadBanner.value) return;
+    clearTimeout(unreadDismissTimer);
+    fadingUnread.value = true;
+    setTimeout(() => {
+        showUnreadBanner.value = false;
+        fadingUnread.value = false;
+        unreadFromIndex.value = -1;
+    }, 500);
+}
+
 async function handleSend() {
     if (!canSend.value || !activeConversation.value) return;
+    dismissUnread();
     sending.value = true;
     try {
         let convId = activeConversation.value.id;
@@ -93,6 +154,7 @@ function handleKeydown(e) {
 }
 
 function handleInput() {
+    dismissUnread();
     if (activeConversation.value?.id) {
         emitTyping(activeConversation.value.id);
     }
@@ -266,8 +328,9 @@ function hasMedia(msg) {
                 </svg>
             </button>
             <div class="relative">
-                <div class="w-10 h-10 rounded-full bg-surface-700 flex items-center justify-center">
-                    <span class="text-xs font-bold text-surface-300">{{ initials(activeConversation.user?.name) }}</span>
+                <div class="w-10 h-10 rounded-full bg-surface-700 flex items-center justify-center overflow-hidden">
+                    <img v-if="activeConversation.user?.profile_picture_url" v-protected-src="activeConversation.user.profile_picture_url" class="w-full h-full object-cover" draggable="false" @contextmenu.prevent />
+                    <span v-else class="text-xs font-bold text-surface-300">{{ initials(activeConversation.user?.name) }}</span>
                 </div>
                 <span v-if="!activeConversation.isDraft && activeConversation.user?.presence_status === 'online'"
                     class="absolute bottom-0 right-0 w-3 h-3 rounded-full bg-emerald-400 ring-2 ring-surface-900"></span>
@@ -331,15 +394,26 @@ function hasMedia(msg) {
                     <div class="flex-1 h-px bg-surface-800/30"></div>
                 </div>
 
+                <!-- Unread divider -->
+                <div v-if="i === unreadDividerIndex && showUnreadBanner" id="unread-divider"
+                    class="flex items-center gap-3 py-3 transition-all duration-500"
+                    :class="fadingUnread ? 'opacity-0 -translate-y-2' : 'opacity-100 translate-y-0'">
+                    <div class="flex-1 h-px bg-brand/40"></div>
+                    <span class="text-[11px] font-semibold text-brand bg-brand/10 px-3 py-1 rounded-full whitespace-nowrap">Unread Messages</span>
+                    <div class="flex-1 h-px bg-brand/40"></div>
+                </div>
+
                 <!-- Message row -->
                 <div
+                    :id="'msg-' + msg.id"
                     class="flex items-end gap-2.5"
                     :class="[msg.user_id === currentUserId ? 'justify-end' : 'justify-start', isSameSender(i) ? 'mt-1' : 'mt-4']"
                 >
                     <!-- Other user avatar -->
                     <div v-if="msg.user_id !== currentUserId" class="w-7 flex-shrink-0 mb-0.5">
-                        <div v-if="isLastInGroup(i)" class="w-7 h-7 rounded-full bg-surface-700 flex items-center justify-center">
-                            <span class="text-[9px] font-bold text-surface-400">{{ initials(msg.sender?.name) }}</span>
+                        <div v-if="isLastInGroup(i)" class="w-7 h-7 rounded-full bg-surface-700 flex items-center justify-center overflow-hidden">
+                            <img v-if="msg.sender?.profile_picture_url" v-protected-src="msg.sender.profile_picture_url" class="w-full h-full object-cover" draggable="false" @contextmenu.prevent />
+                            <span v-else class="text-[9px] font-bold text-surface-400">{{ initials(msg.sender?.name) }}</span>
                         </div>
                     </div>
 
@@ -383,30 +457,22 @@ function hasMedia(msg) {
                                 <div v-if="imageAttachments(msg).length" class="relative bg-surface-800">
                                     <!-- Single image -->
                                     <div v-if="imageAttachments(msg).length === 1"
-                                        class="cursor-pointer" style="min-height: 140px"
+                                        class="cursor-pointer relative overflow-hidden aspect-[4/3]"
                                         @click="lightboxUrl = imageAttachments(msg)[0].url">
-                                        <div v-if="!imageAttachments(msg)[0]._loaded" class="absolute inset-0 flex items-center justify-center z-[1]">
-                                            <div class="w-6 h-6 border-2 border-surface-500 border-t-transparent rounded-full animate-spin"></div>
-                                        </div>
-                                        <img :src="imageAttachments(msg)[0].url" :alt="imageAttachments(msg)[0].original_name"
-                                            @load="imageAttachments(msg)[0]._loaded = true"
-                                            class="w-full hover:brightness-90 transition" style="max-height: 360px"
-                                            loading="lazy" decoding="async" />
+                                        <img v-lazy-src="imageAttachments(msg)[0].url" :alt="imageAttachments(msg)[0].original_name"
+                                            class="w-full h-full object-cover hover:brightness-90 transition-opacity duration-300"
+                                            decoding="async" />
                                     </div>
                                     <!-- Multiple images grid -->
                                     <div v-else class="grid gap-0.5"
                                         :class="imageAttachments(msg).length === 2 ? 'grid-cols-2' : 'grid-cols-3'">
                                         <div v-for="(att, idx) in imageAttachments(msg)" :key="att.id"
                                             class="relative bg-surface-700 cursor-pointer overflow-hidden"
-                                            :class="[
-                                                imageAttachments(msg).length === 3 && idx === 0 ? 'col-span-3 aspect-[16/9]' : 'aspect-square',
-                                            ]"
+                                            :class="imageAttachments(msg).length === 3 && idx === 0 ? 'col-span-3 aspect-[16/9]' : 'aspect-square'"
                                             @click="lightboxUrl = att.url">
-                                            <div v-if="!att._loaded" class="absolute inset-0 flex items-center justify-center z-[1]">
-                                                <div class="w-4 h-4 border-2 border-surface-500 border-t-transparent rounded-full animate-spin"></div>
-                                            </div>
-                                            <img :src="att.url" :alt="att.original_name" @load="att._loaded = true"
-                                                class="w-full h-full object-cover hover:brightness-90 transition" loading="lazy" decoding="async" />
+                                            <img v-lazy-src="att.url" :alt="att.original_name"
+                                                class="w-full h-full object-cover hover:brightness-90 transition-opacity duration-300"
+                                                decoding="async" />
                                         </div>
                                     </div>
                                     <!-- Time overlaid on image -->
@@ -464,8 +530,9 @@ function hasMedia(msg) {
 
             <!-- Typing indicator -->
             <div v-if="typingState" class="flex items-end gap-2.5 mt-4">
-                <div class="w-7 h-7 rounded-full bg-surface-700 flex items-center justify-center flex-shrink-0">
-                    <span class="text-[9px] font-bold text-surface-400">{{ initials(typingState) }}</span>
+                <div class="w-7 h-7 rounded-full bg-surface-700 flex items-center justify-center flex-shrink-0 overflow-hidden">
+                    <img v-if="activeConversation.user?.profile_picture_url" v-protected-src="activeConversation.user.profile_picture_url" class="w-full h-full object-cover" draggable="false" @contextmenu.prevent />
+                    <span v-else class="text-[9px] font-bold text-surface-400">{{ initials(typingState) }}</span>
                 </div>
                 <div class="bg-surface-800 rounded-2xl rounded-bl-sm px-4 py-3">
                     <div class="flex gap-1.5 items-center h-4">

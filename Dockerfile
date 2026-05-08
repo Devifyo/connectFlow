@@ -5,6 +5,8 @@ RUN apk add --no-cache \
     git \
     curl \
     libpng-dev \
+    libjpeg-turbo-dev \
+    libwebp-dev \
     oniguruma-dev \
     libxml2-dev \
     zip \
@@ -15,7 +17,8 @@ RUN apk add --no-cache \
     npm
 
 # 2. PHP Extensions
-RUN docker-php-ext-install \
+RUN docker-php-ext-configure gd --with-jpeg --with-webp && \
+    docker-php-ext-install \
     pdo_mysql \
     mbstring \
     exif \

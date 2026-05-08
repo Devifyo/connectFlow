@@ -1,6 +1,7 @@
 <script setup>
 import { ref } from 'vue';
 import { useMessaging } from '@/composables/useMessaging';
+import { vProtectedSrc } from '@/directives/protectedSrc';
 
 const {
     conversations, activeConversation,
@@ -84,8 +85,9 @@ function initials(name) {
                     @click="selectUser(user)"
                     class="w-full px-3 py-2.5 flex items-center gap-2.5 hover:bg-surface-700/50 transition-colors text-left first:rounded-t-xl last:rounded-b-xl"
                 >
-                    <div class="w-7 h-7 rounded-full bg-brand/15 flex items-center justify-center flex-shrink-0">
-                        <span class="text-[10px] font-bold text-brand">{{ initials(user.name) }}</span>
+                    <div class="w-7 h-7 rounded-full bg-brand/15 flex items-center justify-center flex-shrink-0 overflow-hidden">
+                        <img v-if="user.profile_picture_url" v-protected-src="user.profile_picture_url" class="w-full h-full object-cover" draggable="false" @contextmenu.prevent />
+                        <span v-else class="text-[10px] font-bold text-brand">{{ initials(user.name) }}</span>
                     </div>
                     <div class="min-w-0">
                         <div class="text-xs font-medium text-surface-100 truncate">{{ user.name }}</div>
@@ -115,9 +117,10 @@ function initials(name) {
                     : 'hover:bg-surface-800/30 border-l-transparent'"
             >
                 <div class="relative flex-shrink-0">
-                    <div class="w-9 h-9 rounded-full flex items-center justify-center"
+                    <div class="w-9 h-9 rounded-full flex items-center justify-center overflow-hidden"
                         :class="conv.unread ? 'bg-brand/15' : 'bg-surface-700'">
-                        <span class="text-[10px] font-bold"
+                        <img v-if="conv.user?.profile_picture_url" v-protected-src="conv.user.profile_picture_url" class="w-full h-full object-cover" draggable="false" @contextmenu.prevent />
+                        <span v-else class="text-[10px] font-bold"
                             :class="conv.unread ? 'text-brand' : 'text-surface-400'">
                             {{ initials(conv.user?.name) }}
                         </span>
