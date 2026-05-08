@@ -89,8 +89,23 @@ function requestLocation() {
         punchLocationError.value = 'Geolocation is not supported by your browser.';
         return;
     }
+
     punchLocating.value = true;
     punchLocationError.value = '';
+    punchLocationDenied.value = false;
+
+    if (navigator.permissions) {
+        navigator.permissions.query({ name: 'geolocation' }).then(perm => {
+            perm.onchange = () => {
+                if (perm.state === 'granted' || perm.state === 'prompt') {
+                    punchLocationDenied.value = false;
+                    punchLocationError.value = '';
+                    requestLocation();
+                }
+            };
+        }).catch(() => {});
+    }
+
     navigator.geolocation.getCurrentPosition(
         async (pos) => {
             const lat = pos.coords.latitude;
@@ -109,7 +124,10 @@ function requestLocation() {
         },
         (err) => {
             punchLocating.value = false;
-            if (err.code === 1) punchLocationError.value = 'Location permission denied. Please allow location access to punch in/out.';
+            if (err.code === 1) {
+                punchLocationDenied.value = true;
+                punchLocationError.value = 'Location access is blocked.';
+            }
             else if (err.code === 2) punchLocationError.value = 'Location unavailable. Please try again.';
             else punchLocationError.value = 'Location request timed out. Please try again.';
         },
@@ -1429,7 +1447,18 @@ onUnmounted(() => {
                                     <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1 1 15 0Z"/>
                                 </svg>
                             </div>
-                            <p class="text-sm text-red-400 mb-4">{{ punchLocationError }}</p>
+                            <p class="text-sm text-red-400 mb-3">{{ punchLocationError }}</p>
+
+                            <!-- Denied: show instructions -->
+                            <div v-if="punchLocationDenied" class="text-left mx-auto max-w-xs mb-4">
+                                <p class="text-xs text-surface-400 mb-2">To enable location access:</p>
+                                <ol class="text-xs text-surface-500 space-y-1.5 list-decimal list-inside">
+                                    <li>Click the <span class="text-surface-300 font-medium">lock/site settings icon</span> in the address bar</li>
+                                    <li>Find <span class="text-surface-300 font-medium">Location</span> and set to <span class="text-emerald-400 font-medium">Allow</span></li>
+                                    <li>Click <span class="text-surface-300 font-medium">Try Again</span> below</li>
+                                </ol>
+                            </div>
+
                             <button @click="requestLocation" class="btn-secondary text-xs px-4 py-2">
                                 Try Again
                             </button>
