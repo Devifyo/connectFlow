@@ -46,4 +46,11 @@ class User extends Authenticatable
     {
         return $this->hasMany(TimeLog::class);
     }
+
+    public function conversations()
+    {
+        return $this->belongsToMany(Conversation::class, 'conversation_participants')
+            ->withPivot('last_read_at')
+            ->withTimestamps();
+    }
 }

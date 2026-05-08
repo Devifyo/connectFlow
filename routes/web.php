@@ -6,13 +6,20 @@ use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
 Route::get('/', function () {
+    if (auth()->check()) {
+        return redirect()->route('dashboard');
+    }
+    return redirect()->route('login');
+});
+
+Route::get('/welcome', function () {
     return Inertia::render('Welcome', [
         'canLogin' => Route::has('login'),
         'canRegister' => Route::has('register'),
         'laravelVersion' => Application::VERSION,
         'phpVersion' => PHP_VERSION,
     ]);
-});
+})->name('welcome');
 
 Route::get('/dashboard', function () {
     $user = auth()->user();
@@ -58,6 +65,15 @@ Route::middleware('auth')->group(function () {
         Route::get('/api/pipeline/bids', [\App\Http\Controllers\TenantAdminController::class, 'efficiency']);
         Route::put('/api/pipeline/bids/{id}/status', [\App\Http\Controllers\TenantAdminController::class, 'updateBidStatus']);
     });
+
+    // Messaging Routes
+    Route::get('/api/messages/conversations', [\App\Http\Controllers\MessageController::class, 'conversations']);
+    Route::get('/api/messages/unread-count', [\App\Http\Controllers\MessageController::class, 'unreadCount']);
+    Route::get('/api/messages/search-users', [\App\Http\Controllers\MessageController::class, 'searchUsers']);
+    Route::post('/api/messages/conversations/start', [\App\Http\Controllers\MessageController::class, 'startOrFind']);
+    Route::get('/api/messages/conversations/{conversation}/messages', [\App\Http\Controllers\MessageController::class, 'messages']);
+    Route::post('/api/messages/conversations/{conversation}/send', [\App\Http\Controllers\MessageController::class, 'send']);
+    Route::post('/api/messages/conversations/{conversation}/read', [\App\Http\Controllers\MessageController::class, 'markRead']);
 
     // Super Admin Routes
     Route::middleware('role:SuperAdmin')->group(function () {

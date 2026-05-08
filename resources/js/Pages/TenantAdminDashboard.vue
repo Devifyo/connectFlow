@@ -1,11 +1,16 @@
 <script setup>
 import { Head, router } from '@inertiajs/vue3';
-import { onMounted, ref, computed } from 'vue';
+import { onMounted, onUnmounted, ref, computed } from 'vue';
+import PitchFlowLogo from '@/Components/PitchFlowLogo.vue';
+import MessagingPanel from '@/Components/Messaging/MessagingPanel.vue';
+import { useMessaging } from '@/composables/useMessaging';
 import axios from 'axios';
 import { VueDatePicker } from '@vuepic/vue-datepicker';
 import '@vuepic/vue-datepicker/dist/main.css';
 
 const props = defineProps(['auth']);
+
+const { totalUnread, fetchUnreadCount, handleIncomingMessage, togglePanel } = useMessaging();
 
 const ready = ref(false);
 const activeTab = ref('pipeline');
@@ -386,6 +391,16 @@ onMounted(async () => {
     ready.value = true;
     await Promise.all([fetchPipelineData(), fetchTeamData()]);
     loading.value = false;
+    fetchUnreadCount();
+    if (props.auth.user?.id && window.Echo) {
+        window.Echo.private(`messages.${props.auth.user.id}`).listen('.message.sent', handleIncomingMessage);
+    }
+});
+
+onUnmounted(() => {
+    if (props.auth.user?.id && window.Echo) {
+        window.Echo.leaveChannel(`private-messages.${props.auth.user.id}`);
+    }
 });
 </script>
 
@@ -397,12 +412,8 @@ onMounted(async () => {
         <aside class="hidden lg:flex w-60 flex-col border-r border-surface-800/50 bg-surface-900/50 flex-shrink-0">
             <div class="p-5 border-b border-surface-800/50">
                 <div class="flex items-center gap-2">
-                    <div class="w-7 h-7 rounded-md bg-brand flex items-center justify-center">
-                        <svg class="w-3.5 h-3.5 text-surface-950" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-                        </svg>
-                    </div>
-                    <span class="text-sm font-bold">ConnectFlow</span>
+                    <PitchFlowLogo size="w-7 h-7" />
+                    <span class="text-sm font-bold">PitchFlow</span>
                     <span class="ml-auto text-[10px] font-medium bg-brand/10 text-brand px-1.5 py-0.5 rounded">Admin</span>
                 </div>
             </div>
@@ -444,7 +455,13 @@ onMounted(async () => {
                         <p class="text-xs text-surface-500">Tenant Admin</p>
                     </div>
                 </div>
-                <button @click="router.post('/logout')" class="mt-3 w-full btn-ghost text-xs justify-center">
+                <button @click="togglePanel" class="mt-3 w-full btn-ghost text-xs justify-center relative">
+                    Messages
+                    <span v-if="totalUnread > 0" class="ml-1.5 min-w-[18px] h-[18px] rounded-full bg-brand inline-flex items-center justify-center px-1">
+                        <span class="text-[9px] font-bold text-surface-950 leading-none">{{ totalUnread > 99 ? '99+' : totalUnread }}</span>
+                    </span>
+                </button>
+                <button @click="router.post('/logout')" class="mt-1 w-full btn-ghost text-xs justify-center">
                     Sign out
                 </button>
             </div>
@@ -455,19 +472,23 @@ onMounted(async () => {
             <!-- Mobile header -->
             <header class="lg:hidden h-14 border-b border-surface-800/50 px-4 flex items-center justify-between flex-shrink-0">
                 <div class="flex items-center gap-2">
-                    <div class="w-6 h-6 rounded-md bg-brand flex items-center justify-center">
-                        <svg class="w-3 h-3 text-surface-950" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-                        </svg>
-                    </div>
-                    <span class="text-sm font-bold">ConnectFlow</span>
+                    <PitchFlowLogo size="w-6 h-6" />
+                    <span class="text-sm font-bold">PitchFlow</span>
                 </div>
-                <div class="flex gap-1">
+                <div class="flex items-center gap-1">
                     <button v-for="tab in ['pipeline', 'team', 'reports']" :key="tab"
                         @click="activeTab = tab"
                         :class="activeTab === tab ? 'bg-surface-700 text-surface-100' : 'text-surface-400'"
                         class="px-3 py-1.5 rounded-md text-xs font-medium capitalize transition-colors">
                         {{ tab }}
+                    </button>
+                    <button @click="togglePanel" class="relative p-1.5 rounded-md text-surface-400 hover:text-surface-100 transition-colors ml-1">
+                        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M8.625 9.75a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375m-13.5 3.01c0 1.6 1.123 2.994 2.707 3.227 1.087.16 2.185.283 3.293.369V21l4.184-4.183a1.14 1.14 0 01.778-.332 48.294 48.294 0 005.83-.498c1.585-.233 2.708-1.626 2.708-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z"/>
+                        </svg>
+                        <span v-if="totalUnread > 0" class="absolute -top-1 -right-1 min-w-[14px] h-[14px] rounded-full bg-brand flex items-center justify-center">
+                            <span class="text-[8px] font-bold text-surface-950 leading-none">{{ totalUnread > 9 ? '9+' : totalUnread }}</span>
+                        </span>
                     </button>
                 </div>
             </header>
@@ -1290,5 +1311,6 @@ onMounted(async () => {
                 </div>
             </main>
         </div>
+        <MessagingPanel />
     </div>
 </template>

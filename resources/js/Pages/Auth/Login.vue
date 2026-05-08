@@ -1,6 +1,7 @@
 <script setup>
 import { Head, Link, useForm } from '@inertiajs/vue3';
 import InputError from '@/Components/InputError.vue';
+import PitchFlowLogo from '@/Components/PitchFlowLogo.vue';
 import { onMounted, ref } from 'vue';
 
 defineProps({
@@ -36,12 +37,8 @@ const submit = () => {
 
             <div class="relative z-10">
                 <div class="flex items-center gap-2.5">
-                    <div class="w-9 h-9 rounded-lg bg-brand flex items-center justify-center">
-                        <svg class="w-4.5 h-4.5 text-surface-950" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-                        </svg>
-                    </div>
-                    <span class="text-xl font-bold text-surface-100">ConnectFlow</span>
+                    <PitchFlowLogo size="w-9 h-9" />
+                    <span class="text-xl font-bold text-surface-100">PitchFlow</span>
                 </div>
             </div>
 
@@ -68,12 +65,8 @@ const submit = () => {
             <div class="w-full max-w-sm mx-auto" :class="{ 'animate-fade-in': ready }">
                 <!-- Mobile logo -->
                 <div class="flex items-center gap-2 mb-10 lg:hidden">
-                    <div class="w-8 h-8 rounded-lg bg-brand flex items-center justify-center">
-                        <svg class="w-4 h-4 text-surface-950" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-                        </svg>
-                    </div>
-                    <span class="text-lg font-bold text-surface-100">ConnectFlow</span>
+                    <PitchFlowLogo size="w-8 h-8" />
+                    <span class="text-lg font-bold text-surface-100">PitchFlow</span>
                 </div>
 
                 <div class="mb-8">
@@ -151,12 +144,17 @@ const submit = () => {
                     </button>
                 </form>
 
-                <p class="mt-8 text-sm text-surface-500 text-center">
-                    Don't have an account?
-                    <Link :href="route('register')" class="text-brand hover:text-brand-light transition-colors font-medium">
-                        Create one
+                <div class="mt-8 pt-6 border-t border-surface-800/50 text-center">
+                    <p class="text-sm text-surface-500">
+                        Looking to streamline your agency's proposals and manage your bidders or BDEs from one place?
+                    </p>
+                    <Link :href="route('welcome')" class="inline-flex items-center gap-1.5 mt-2 text-sm text-brand hover:text-brand-light transition-colors font-medium">
+                        See how PitchFlow works
+                        <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                        </svg>
                     </Link>
-                </p>
+                </div>
             </div>
         </div>
     </div>

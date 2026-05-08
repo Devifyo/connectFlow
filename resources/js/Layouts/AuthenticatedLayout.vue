@@ -1,12 +1,36 @@
 <script setup>
-import { ref } from 'vue';
+import { ref, onMounted, onUnmounted } from 'vue';
+import PitchFlowLogo from '@/Components/PitchFlowLogo.vue';
 import Dropdown from '@/Components/Dropdown.vue';
 import DropdownLink from '@/Components/DropdownLink.vue';
 import NavLink from '@/Components/NavLink.vue';
 import ResponsiveNavLink from '@/Components/ResponsiveNavLink.vue';
-import { Link } from '@inertiajs/vue3';
+import MessagingPanel from '@/Components/Messaging/MessagingPanel.vue';
+import { Link, usePage } from '@inertiajs/vue3';
+import { useMessaging } from '@/composables/useMessaging';
 
 const showingNavigationDropdown = ref(false);
+
+const page = usePage();
+const { totalUnread, fetchUnreadCount, handleIncomingMessage, togglePanel } = useMessaging();
+
+let echoChannel = null;
+
+onMounted(() => {
+    fetchUnreadCount();
+    const userId = page.props.auth.user?.id;
+    if (userId && window.Echo) {
+        echoChannel = window.Echo.private(`messages.${userId}`);
+        echoChannel.listen('.message.sent', handleIncomingMessage);
+    }
+});
+
+onUnmounted(() => {
+    const userId = page.props.auth.user?.id;
+    if (userId && window.Echo) {
+        window.Echo.leaveChannel(`private-messages.${userId}`);
+    }
+});
 </script>
 
 <template>
@@ -18,12 +42,8 @@ const showingNavigationDropdown = ref(false);
                     <!-- Left: Logo + nav links -->
                     <div class="flex items-center gap-8">
                         <Link :href="route('dashboard')" class="flex items-center gap-2">
-                            <div class="w-7 h-7 rounded-md bg-brand flex items-center justify-center">
-                                <svg class="w-3.5 h-3.5 text-surface-950" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
-                                    <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-                                </svg>
-                            </div>
-                            <span class="text-sm font-bold text-surface-100 hidden sm:block">ConnectFlow</span>
+                            <PitchFlowLogo size="w-7 h-7" />
+                            <span class="text-sm font-bold text-surface-100 hidden sm:block">PitchFlow</span>
                         </Link>
 
                         <div class="hidden sm:flex items-center gap-1">
@@ -33,8 +53,21 @@ const showingNavigationDropdown = ref(false);
                         </div>
                     </div>
 
-                    <!-- Right: User menu -->
+                    <!-- Right: Chat + User menu -->
                     <div class="hidden sm:flex items-center gap-3">
+                        <!-- Chat button -->
+                        <button
+                            @click="togglePanel"
+                            class="relative p-2 rounded-lg text-surface-400 hover:text-surface-100 hover:bg-surface-800/50 transition-all duration-200"
+                        >
+                            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M8.625 9.75a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375m-13.5 3.01c0 1.6 1.123 2.994 2.707 3.227 1.087.16 2.185.283 3.293.369V21l4.184-4.183a1.14 1.14 0 01.778-.332 48.294 48.294 0 005.83-.498c1.585-.233 2.708-1.626 2.708-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z"/>
+                            </svg>
+                            <span v-if="totalUnread > 0" class="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] rounded-full bg-brand flex items-center justify-center px-1">
+                                <span class="text-[9px] font-bold text-surface-950 leading-none">{{ totalUnread > 99 ? '99+' : totalUnread }}</span>
+                            </span>
+                        </button>
+
                         <Dropdown align="right" width="48">
                             <template #trigger>
                                 <button
@@ -62,10 +95,22 @@ const showingNavigationDropdown = ref(false);
                         </Dropdown>
                     </div>
 
-                    <!-- Mobile hamburger -->
+                    <!-- Mobile: chat + hamburger -->
+                    <div class="sm:hidden flex items-center gap-1">
+                        <button
+                            @click="togglePanel"
+                            class="relative p-2 rounded-lg text-surface-400 hover:text-surface-200 hover:bg-surface-800/50 transition-colors"
+                        >
+                            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M8.625 9.75a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375m-13.5 3.01c0 1.6 1.123 2.994 2.707 3.227 1.087.16 2.185.283 3.293.369V21l4.184-4.183a1.14 1.14 0 01.778-.332 48.294 48.294 0 005.83-.498c1.585-.233 2.708-1.626 2.708-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z"/>
+                            </svg>
+                            <span v-if="totalUnread > 0" class="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] rounded-full bg-brand flex items-center justify-center px-1">
+                                <span class="text-[9px] font-bold text-surface-950 leading-none">{{ totalUnread > 99 ? '99+' : totalUnread }}</span>
+                            </span>
+                        </button>
                     <button
                         @click="showingNavigationDropdown = !showingNavigationDropdown"
-                        class="sm:hidden p-2 rounded-lg text-surface-400 hover:text-surface-200 hover:bg-surface-800/50 transition-colors"
+                        class="p-2 rounded-lg text-surface-400 hover:text-surface-200 hover:bg-surface-800/50 transition-colors"
                     >
                         <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                             <path
@@ -82,6 +127,7 @@ const showingNavigationDropdown = ref(false);
                             />
                         </svg>
                     </button>
+                    </div>
                 </div>
             </div>
 
@@ -121,5 +167,8 @@ const showingNavigationDropdown = ref(false);
         <main>
             <slot />
         </main>
+
+        <!-- Messaging panel -->
+        <MessagingPanel />
     </div>
 </template>

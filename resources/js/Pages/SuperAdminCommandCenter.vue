@@ -1,9 +1,14 @@
 <script setup>
 import { Head, router } from '@inertiajs/vue3';
-import { onMounted, ref, computed } from 'vue';
+import { onMounted, onUnmounted, ref, computed } from 'vue';
+import PitchFlowLogo from '@/Components/PitchFlowLogo.vue';
+import MessagingPanel from '@/Components/Messaging/MessagingPanel.vue';
+import { useMessaging } from '@/composables/useMessaging';
 import axios from 'axios';
 
 const props = defineProps(['auth']);
+
+const { totalUnread, fetchUnreadCount, handleIncomingMessage, togglePanel } = useMessaging();
 
 const ready = ref(false);
 const loading = ref(true);
@@ -57,6 +62,16 @@ onMounted(async () => {
     ready.value = true;
     await fetchTenants();
     loading.value = false;
+    fetchUnreadCount();
+    if (props.auth.user?.id && window.Echo) {
+        window.Echo.private(`messages.${props.auth.user.id}`).listen('.message.sent', handleIncomingMessage);
+    }
+});
+
+onUnmounted(() => {
+    if (props.auth.user?.id && window.Echo) {
+        window.Echo.leaveChannel(`private-messages.${props.auth.user.id}`);
+    }
 });
 </script>
 
@@ -68,16 +83,20 @@ onMounted(async () => {
         <nav class="sticky top-0 z-50 bg-surface-950/80 backdrop-blur-xl border-b border-surface-800/50">
             <div class="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
                 <div class="flex items-center gap-3">
-                    <div class="w-7 h-7 rounded-md bg-brand flex items-center justify-center">
-                        <svg class="w-3.5 h-3.5 text-surface-950" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-                        </svg>
-                    </div>
-                    <span class="text-sm font-bold">ConnectFlow</span>
+                    <PitchFlowLogo size="w-7 h-7" />
+                    <span class="text-sm font-bold">PitchFlow</span>
                     <span class="badge-neutral text-xs ml-2">Super Admin</span>
                 </div>
 
                 <div class="flex items-center gap-4">
+                    <button @click="togglePanel" class="relative p-2 rounded-lg text-surface-400 hover:text-surface-100 hover:bg-surface-800/50 transition-colors">
+                        <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M8.625 9.75a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375m-13.5 3.01c0 1.6 1.123 2.994 2.707 3.227 1.087.16 2.185.283 3.293.369V21l4.184-4.183a1.14 1.14 0 01.778-.332 48.294 48.294 0 005.83-.498c1.585-.233 2.708-1.626 2.708-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z"/>
+                        </svg>
+                        <span v-if="totalUnread > 0" class="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] rounded-full bg-brand flex items-center justify-center px-1">
+                            <span class="text-[9px] font-bold text-surface-950 leading-none">{{ totalUnread > 99 ? '99+' : totalUnread }}</span>
+                        </span>
+                    </button>
                     <span class="text-sm text-surface-400">{{ auth.user.name }}</span>
                     <button @click="router.post('/logout')" class="btn-ghost text-xs">Sign out</button>
                 </div>
@@ -216,5 +235,6 @@ onMounted(async () => {
                 </div>
             </div>
         </main>
+        <MessagingPanel />
     </div>
 </template>
