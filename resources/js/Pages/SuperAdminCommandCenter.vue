@@ -4,11 +4,13 @@ import { onMounted, onUnmounted, ref, computed } from 'vue';
 import PitchFlowLogo from '@/Components/PitchFlowLogo.vue';
 import MessagingPanel from '@/Components/Messaging/MessagingPanel.vue';
 import { useMessaging } from '@/composables/useMessaging';
+import { useTabBadge } from '@/composables/useTabBadge';
 import axios from 'axios';
 
 const props = defineProps(['auth']);
 
 const { totalUnread, fetchUnreadCount, handleIncomingMessage, handleTypingEvent, handleReadEvent, handlePresenceEvent, togglePanel, startHeartbeat } = useMessaging();
+useTabBadge(totalUnread, 'Super Admin - PitchFlow');
 
 const ready = ref(false);
 const loading = ref(true);

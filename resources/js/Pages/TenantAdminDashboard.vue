@@ -4,6 +4,7 @@ import { onMounted, onUnmounted, ref, computed } from 'vue';
 import PitchFlowLogo from '@/Components/PitchFlowLogo.vue';
 import MessagingPanel from '@/Components/Messaging/MessagingPanel.vue';
 import { useMessaging } from '@/composables/useMessaging';
+import { useTabBadge } from '@/composables/useTabBadge';
 import axios from 'axios';
 import { VueDatePicker } from '@vuepic/vue-datepicker';
 import '@vuepic/vue-datepicker/dist/main.css';
@@ -11,6 +12,7 @@ import '@vuepic/vue-datepicker/dist/main.css';
 const props = defineProps(['auth']);
 
 const { totalUnread, fetchUnreadCount, handleIncomingMessage, handleTypingEvent, handleReadEvent, handlePresenceEvent, togglePanel, startHeartbeat } = useMessaging();
+useTabBadge(totalUnread, 'Admin Dashboard - PitchFlow');
 
 const ready = ref(false);
 const activeTab = ref('pipeline');
@@ -481,40 +483,50 @@ onUnmounted(() => {
         <!-- Main content -->
         <div class="flex-1 flex flex-col min-h-screen overflow-hidden">
             <!-- Mobile header -->
-            <header class="lg:hidden h-14 border-b border-surface-800/50 px-4 flex items-center justify-between flex-shrink-0">
-                <div class="flex items-center gap-2">
-                    <PitchFlowLogo size="w-6 h-6" />
-                    <span class="text-sm font-bold">PitchFlow</span>
+            <header class="lg:hidden border-b border-surface-800/50 flex-shrink-0">
+                <div class="h-14 px-4 flex items-center justify-between">
+                    <div class="flex items-center gap-2">
+                        <PitchFlowLogo size="w-6 h-6" />
+                        <span class="text-sm font-bold">PitchFlow</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <button @click="togglePanel" class="relative p-1.5 rounded-md text-surface-400 hover:text-surface-100 transition-colors">
+                            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M8.625 9.75a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375m-13.5 3.01c0 1.6 1.123 2.994 2.707 3.227 1.087.16 2.185.283 3.293.369V21l4.184-4.183a1.14 1.14 0 01.778-.332 48.294 48.294 0 005.83-.498c1.585-.233 2.708-1.626 2.708-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z"/>
+                            </svg>
+                            <span v-if="totalUnread > 0" class="absolute -top-1 -right-1 min-w-[14px] h-[14px] rounded-full bg-brand flex items-center justify-center animate-badge-blink">
+                                <span class="text-[8px] font-bold text-surface-950 leading-none">{{ totalUnread > 9 ? '9+' : totalUnread }}</span>
+                            </span>
+                        </button>
+                        <button @click="router.post('/logout')" class="p-1.5 rounded-md text-surface-400 hover:text-red-400 transition-colors" title="Sign out">
+                            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3-3h-9m9 0l-3-3m3 3l-3 3" />
+                            </svg>
+                        </button>
+                    </div>
                 </div>
-                <div class="flex items-center gap-1">
+                <!-- Mobile tab bar -->
+                <div class="px-4 pb-2 flex gap-1">
                     <button v-for="tab in ['pipeline', 'team', 'reports']" :key="tab"
                         @click="activeTab = tab"
                         :class="activeTab === tab ? 'bg-surface-700 text-surface-100' : 'text-surface-400'"
-                        class="px-3 py-1.5 rounded-md text-xs font-medium capitalize transition-colors">
+                        class="flex-1 py-1.5 rounded-md text-xs font-medium capitalize transition-colors text-center">
                         {{ tab }}
-                    </button>
-                    <button @click="togglePanel" class="relative p-1.5 rounded-md text-surface-400 hover:text-surface-100 transition-colors ml-1">
-                        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M8.625 9.75a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375m-13.5 3.01c0 1.6 1.123 2.994 2.707 3.227 1.087.16 2.185.283 3.293.369V21l4.184-4.183a1.14 1.14 0 01.778-.332 48.294 48.294 0 005.83-.498c1.585-.233 2.708-1.626 2.708-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z"/>
-                        </svg>
-                        <span v-if="totalUnread > 0" class="absolute -top-1 -right-1 min-w-[14px] h-[14px] rounded-full bg-brand flex items-center justify-center animate-badge-blink">
-                            <span class="text-[8px] font-bold text-surface-950 leading-none">{{ totalUnread > 9 ? '9+' : totalUnread }}</span>
-                        </span>
                     </button>
                 </div>
             </header>
 
             <!-- Top bar -->
-            <header class="h-14 border-b border-surface-800/50 px-6 flex items-center justify-between flex-shrink-0">
-                <h1 class="text-lg font-semibold text-surface-100 capitalize">{{ activeTab }}</h1>
-                <div class="flex items-center gap-3">
-                    <div v-if="summary.conversion_rate > 0" class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface-800/50 border border-surface-700/30">
+            <header class="h-14 border-b border-surface-800/50 px-4 sm:px-6 flex items-center justify-between flex-shrink-0">
+                <h1 class="text-base sm:text-lg font-semibold text-surface-100 capitalize">{{ activeTab }}</h1>
+                <div class="flex items-center gap-2 sm:gap-3">
+                    <div v-if="summary.conversion_rate > 0" class="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface-800/50 border border-surface-700/30">
                         <span class="text-xs text-surface-400">Conversion</span>
                         <span class="text-sm font-semibold text-brand">{{ summary.conversion_rate }}%</span>
                     </div>
-                    <div class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface-800/50 border border-surface-700/30">
-                        <span class="text-xs text-surface-400">Total Bids</span>
-                        <span class="text-sm font-semibold text-surface-200">{{ summary.total }}</span>
+                    <div class="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1.5 rounded-lg bg-surface-800/50 border border-surface-700/30">
+                        <span class="text-[10px] sm:text-xs text-surface-400">Bids</span>
+                        <span class="text-xs sm:text-sm font-semibold text-surface-200">{{ summary.total }}</span>
                     </div>
                 </div>
             </header>
@@ -528,7 +540,7 @@ onUnmounted(() => {
             </div>
 
             <!-- ========== PIPELINE TAB ========== -->
-            <main v-else-if="activeTab === 'pipeline'" class="flex-1 p-6 overflow-x-auto" :class="{ 'animate-fade-in': ready }">
+            <main v-else-if="activeTab === 'pipeline'" class="flex-1 p-4 sm:p-6 overflow-y-auto" :class="{ 'animate-fade-in': ready }">
                 <div v-if="bids.length === 0" class="flex-1 flex items-center justify-center h-full">
                     <div class="text-center">
                         <div class="w-16 h-16 mx-auto mb-4 rounded-2xl bg-surface-800/50 flex items-center justify-center">
@@ -541,7 +553,7 @@ onUnmounted(() => {
                     </div>
                 </div>
 
-                <div v-else class="grid grid-cols-4 gap-4 h-full min-h-[500px]">
+                <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 min-h-0">
                     <div v-for="status in statusOptions" :key="status"
                         class="flex flex-col rounded-2xl bg-surface-900/50 border-2 min-w-0 transition-colors duration-200"
                         :class="dragOverStatus === status ? 'border-brand/50 bg-brand/5' : 'border-surface-800/40'"

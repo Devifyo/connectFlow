@@ -197,10 +197,24 @@ export function useMessaging() {
     }
 
     let audioCtx = null;
+    let audioUnlocked = false;
 
     function getAudioContext() {
         if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         return audioCtx;
+    }
+
+    function unlockAudio() {
+        if (audioUnlocked) return;
+        const ctx = getAudioContext();
+        if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+        audioUnlocked = true;
+    }
+
+    function initAudio() {
+        ['click', 'keydown', 'touchstart'].forEach(e => {
+            document.addEventListener(e, unlockAudio, { once: true, passive: true });
+        });
     }
 
     function playNotificationSound() {
@@ -270,6 +284,7 @@ export function useMessaging() {
         if (heartbeatStarted) return;
         heartbeatStarted = true;
         currentStatus = 'online';
+        initAudio();
 
         axios.post('/api/heartbeat', { status: 'online' }).catch(() => {});
 

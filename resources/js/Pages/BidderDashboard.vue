@@ -4,6 +4,7 @@ import { Head, router } from '@inertiajs/vue3';
 import PitchFlowLogo from '@/Components/PitchFlowLogo.vue';
 import MessagingPanel from '@/Components/Messaging/MessagingPanel.vue';
 import { useMessaging } from '@/composables/useMessaging';
+import { useTabBadge } from '@/composables/useTabBadge';
 import axios from 'axios';
 import { VueDatePicker } from '@vuepic/vue-datepicker';
 import '@vuepic/vue-datepicker/dist/main.css';
@@ -14,6 +15,7 @@ import { vProtectedSrc } from '@/directives/protectedSrc';
 const props = defineProps(['auth', 'impersonating']);
 
 const { totalUnread, fetchUnreadCount, handleIncomingMessage, handleTypingEvent, handleReadEvent, handlePresenceEvent, togglePanel, startHeartbeat } = useMessaging();
+useTabBadge(totalUnread, 'Dashboard - PitchFlow');
 
 async function stopImpersonating() {
     try {
