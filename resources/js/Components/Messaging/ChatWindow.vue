@@ -318,6 +318,15 @@ function initials(name) {
     return name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
 }
 
+function linkify(text) {
+    if (!text) return '';
+    const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return escaped.replace(
+        /https?:\/\/[^\s<]+/g,
+        url => `<a href="${url}" target="_blank" rel="noopener noreferrer" class="underline break-all">${url}</a>`
+    );
+}
+
 function lastSeenText(dateStr) {
     if (!dateStr) return '';
     const d = new Date(dateStr);
@@ -495,7 +504,7 @@ function hasMedia(msg) {
                                         ? 'bg-brand text-surface-950'
                                         : 'bg-surface-800 text-surface-100'"
                                 >
-                                    <p class="whitespace-pre-wrap break-words">{{ msg.body }}</p>
+                                    <p class="whitespace-pre-wrap break-words" v-html="linkify(msg.body)"></p>
                                     <!-- Inline time for text-only messages -->
                                     <div v-if="!hasMedia(msg)" class="flex items-center justify-end gap-1.5 mt-1 -mb-0.5">
                                         <span class="text-[10px] leading-none" :class="msg.user_id === currentUserId ? 'text-surface-950/50' : 'text-surface-500'">{{ formatTime(msg.created_at) }}</span>

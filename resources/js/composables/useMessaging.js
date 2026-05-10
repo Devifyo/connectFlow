@@ -1,4 +1,5 @@
 import { ref } from 'vue';
+import { usePage } from '@inertiajs/vue3';
 import axios from 'axios';
 
 const conversations = ref([]);
@@ -83,6 +84,7 @@ export function useMessaging() {
     }
 
     async function markRead(conversationId) {
+        if (usePage().props.impersonating) return;
         await axios.post(`/api/messages/conversations/${conversationId}/read`);
         const conv = conversations.value.find(c => c.id === conversationId);
         if (conv) {
@@ -282,6 +284,7 @@ export function useMessaging() {
 
     function startHeartbeat() {
         if (heartbeatStarted) return;
+        if (usePage().props.impersonating) return;
         heartbeatStarted = true;
         currentStatus = 'online';
         initAudio();

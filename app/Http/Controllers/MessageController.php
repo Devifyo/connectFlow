@@ -161,9 +161,11 @@ class MessageController extends Controller
             }
         }
 
-        $conversation->participants()->updateExistingPivot($user->id, [
-            'last_read_at' => now(),
-        ]);
+        if (!session()->has('impersonator_id')) {
+            $conversation->participants()->updateExistingPivot($user->id, [
+                'last_read_at' => now(),
+            ]);
+        }
 
         $message->load('sender:id,name,profile_picture', 'attachments');
 
@@ -250,6 +252,10 @@ class MessageController extends Controller
 
     public function markRead(Conversation $conversation)
     {
+        if (session()->has('impersonator_id')) {
+            return response()->json(['ok' => true]);
+        }
+
         $user = auth()->user();
         if (!$conversation->participants()->where('user_id', $user->id)->exists()) {
             return response()->json(['error' => 'Forbidden'], 403);
@@ -314,6 +320,10 @@ class MessageController extends Controller
 
     public function heartbeat(Request $request)
     {
+        if (session()->has('impersonator_id')) {
+            return response()->json(['ok' => true]);
+        }
+
         $user = auth()->user();
         $newStatus = $request->input('status', 'online');
         $oldStatus = $user->presence_status ?? 'offline';
@@ -332,6 +342,10 @@ class MessageController extends Controller
 
     public function goOffline()
     {
+        if (session()->has('impersonator_id')) {
+            return response()->json(['ok' => true]);
+        }
+
         $user = auth()->user();
         if (!$user) return response()->json(['ok' => true]);
 
@@ -379,4 +393,5 @@ class MessageController extends Controller
             } catch (\Throwable $e) {}
         }
     }
+
 }
