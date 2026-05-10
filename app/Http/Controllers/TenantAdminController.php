@@ -452,4 +452,37 @@ class TenantAdminController extends Controller
 
         return response()->json(['status' => 'success']);
     }
+
+    public function getAgencyProfile()
+    {
+        $tenant = \App\Models\Tenant::find(auth()->user()->tenant_id);
+        return response()->json($tenant->agency_profile ?? [
+            'skills' => '',
+            'tech_stack' => '',
+            'description' => '',
+            'can_build' => '',
+        ]);
+    }
+
+    public function updateAgencyProfile(Request $request)
+    {
+        $request->validate([
+            'skills' => 'nullable|string|max:1000',
+            'tech_stack' => 'nullable|string|max:1000',
+            'description' => 'nullable|string|max:2000',
+            'can_build' => 'nullable|string|max:2000',
+        ]);
+
+        $tenant = \App\Models\Tenant::find(auth()->user()->tenant_id);
+        $tenant->update([
+            'agency_profile' => [
+                'skills' => $request->skills,
+                'tech_stack' => $request->tech_stack,
+                'description' => $request->description,
+                'can_build' => $request->can_build,
+            ],
+        ]);
+
+        return response()->json(['status' => 'success']);
+    }
 }

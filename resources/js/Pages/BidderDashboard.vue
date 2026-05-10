@@ -185,6 +185,8 @@ async function checkUrl() {
     if (!url.value.trim()) return;
     isChecking.value = true;
     checkStatus.value = null;
+    showAnalyzePanel.value = false;
+    analysis.value = null;
     try {
         const { data } = await axios.post('/api/bids/check', { url: url.value });
         checkStatus.value = data.status;
@@ -195,6 +197,62 @@ async function checkUrl() {
     } finally {
         isChecking.value = false;
     }
+}
+
+// --- Job AI Analysis ---
+const jobText = ref('');
+const isAnalyzing = ref(false);
+const analysis = ref(null);
+const analysisError = ref('');
+const showAnalyzePanel = ref(false);
+const analyzeTextarea = ref(null);
+const waitingForPaste = ref(false);
+
+async function checkAndAnalyze() {
+    await checkUrl();
+    showAnalyzePanel.value = true;
+    analysis.value = null;
+    analysisError.value = '';
+    jobText.value = '';
+    waitingForPaste.value = true;
+    window.open(url.value, '_blank');
+    await nextTick();
+    analyzeTextarea.value?.focus();
+}
+
+function onJobTextPaste() {
+    if (!waitingForPaste.value) return;
+    waitingForPaste.value = false;
+    setTimeout(() => {
+        if (jobText.value.trim().length >= 20) analyzeJob();
+    }, 100);
+}
+
+async function analyzeJob() {
+    if (!jobText.value.trim() || jobText.value.trim().length < 20) return;
+    isAnalyzing.value = true;
+    analysis.value = null;
+    analysisError.value = '';
+    try {
+        const { data } = await axios.post('/api/bids/analyze-job', { job_text: jobText.value });
+        analysis.value = data;
+    } catch (e) {
+        analysisError.value = e.response?.data?.error || 'Analysis failed. Please try again.';
+    } finally {
+        isAnalyzing.value = false;
+    }
+}
+
+function flagColor(level) {
+    if (level === 'red') return { bg: 'bg-red-500/10', border: 'border-red-500/20', text: 'text-red-400', icon: '🔴' };
+    if (level === 'yellow') return { bg: 'bg-amber-500/10', border: 'border-amber-500/20', text: 'text-amber-400', icon: '🟡' };
+    return { bg: 'bg-emerald-500/10', border: 'border-emerald-500/20', text: 'text-emerald-400', icon: '✅' };
+}
+
+function verdictStyle(verdict) {
+    if (verdict === 'AVOID') return 'bg-red-500/10 border-red-500/30 text-red-400';
+    if (verdict === 'PROCEED WITH CAUTION') return 'bg-amber-500/10 border-amber-500/30 text-amber-400';
+    return 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400';
 }
 
 // --- Submit Bid ---
@@ -735,7 +793,7 @@ onUnmounted(() => {
                     class="px-4 py-2.5 text-sm font-medium rounded-t-lg transition-colors relative"
                     :class="activeTab === 'checker' ? 'text-surface-100 bg-surface-800/50' : 'text-surface-400 hover:text-surface-300'"
                 >
-                    URL Checker
+                    Submit Job
                     <div v-if="activeTab === 'checker'" class="absolute bottom-0 left-0 right-0 h-0.5 bg-brand rounded-full"></div>
                 </button>
                 <button
@@ -765,11 +823,12 @@ onUnmounted(() => {
                 </button>
             </div>
 
-            <!-- Tab: URL Checker -->
+            <!-- Tab: Submit Job -->
             <div v-show="activeTab === 'checker'">
                 <div class="card p-6 sm:p-8 max-w-2xl">
-                    <h2 class="text-lg font-semibold text-surface-100 mb-1">Check Job Availability</h2>
-                    <p class="text-sm text-surface-400 mb-6">Paste a job URL to verify no one on your team has already bid.</p>
+                    <h2 class="text-lg font-semibold text-surface-100 mb-1">Submit Job</h2>
+                    <p class="text-sm text-surface-400 mb-1">Paste a job URL to verify no one on your team has already bid.</p>
+                    <p class="text-xs text-amber-400/80 mb-6">Important: Always submit your jobs here so that we can track your project, else your applied project may go untracked.</p>
 
                     <div class="space-y-4">
                         <div class="relative">
@@ -785,21 +844,38 @@ onUnmounted(() => {
                             </svg>
                         </div>
 
-                        <button
-                            @click="checkUrl"
-                            :disabled="isChecking || !url.trim()"
-                            class="btn-primary w-full py-3 text-sm"
-                            :class="{ 'opacity-50 pointer-events-none': isChecking || !url.trim() }"
-                        >
-                            <svg v-if="!isChecking" class="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                                <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
-                            </svg>
-                            <svg v-else class="animate-spin w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24">
-                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                            </svg>
-                            {{ isChecking ? 'Checking...' : 'Check Availability' }}
-                        </button>
+                        <div class="flex gap-3">
+                            <button
+                                @click="checkUrl"
+                                :disabled="isChecking || !url.trim()"
+                                class="btn-primary flex-1 py-3 text-sm"
+                                :class="{ 'opacity-50 pointer-events-none': isChecking || !url.trim() }"
+                            >
+                                <svg v-if="!isChecking" class="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+                                </svg>
+                                <svg v-else class="animate-spin w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24">
+                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                </svg>
+                                {{ isChecking ? 'Submitting...' : 'Submit Job' }}
+                            </button>
+                            <button
+                                @click="checkAndAnalyze"
+                                :disabled="isChecking || isAnalyzing || !url.trim()"
+                                class="flex-1 py-3 text-sm font-medium rounded-xl inline-flex items-center justify-center transition-all border border-purple-500/30 bg-purple-500/10 text-purple-400 hover:bg-purple-500/20"
+                                :class="{ 'opacity-50 pointer-events-none': isChecking || isAnalyzing || !url.trim() }"
+                            >
+                                <svg v-if="!isAnalyzing" class="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456z" />
+                                </svg>
+                                <svg v-else class="animate-spin w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24">
+                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                </svg>
+                                {{ isAnalyzing ? 'Analyzing...' : 'Check + AI Analyze' }}
+                            </button>
+                        </div>
                     </div>
 
                     <!-- Result -->
@@ -869,6 +945,100 @@ onUnmounted(() => {
                             </div>
                         </div>
                     </div>
+
+                    <!-- AI Analysis: Job text input (shows when awaiting paste) -->
+                    <div v-if="showAnalyzePanel" class="mt-5">
+                        <div class="flex items-center gap-2 mb-3">
+                            <svg class="w-4 h-4 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
+                            </svg>
+                            <p class="text-sm font-medium text-purple-400">AI Red Flag Analysis</p>
+                        </div>
+
+                        <div v-if="waitingForPaste && !isAnalyzing && !analysis" class="p-4 rounded-xl bg-purple-500/5 border border-purple-500/20 mb-3">
+                            <p class="text-sm text-purple-300 font-medium mb-2">Job opened in new tab. Now:</p>
+                            <div class="flex items-center gap-6 text-xs text-surface-300">
+                                <div class="flex items-center gap-2">
+                                    <span class="w-5 h-5 rounded-full bg-purple-500/20 text-purple-400 text-[10px] font-bold flex items-center justify-center">1</span>
+                                    <span><span class="text-surface-100 font-medium">Ctrl+A</span> on Upwork tab</span>
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <span class="w-5 h-5 rounded-full bg-purple-500/20 text-purple-400 text-[10px] font-bold flex items-center justify-center">2</span>
+                                    <span><span class="text-surface-100 font-medium">Ctrl+C</span> to copy</span>
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <span class="w-5 h-5 rounded-full bg-purple-500/20 text-purple-400 text-[10px] font-bold flex items-center justify-center">3</span>
+                                    <span><span class="text-surface-100 font-medium">Ctrl+V</span> below</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <textarea
+                            ref="analyzeTextarea"
+                            v-model="jobText"
+                            @paste="onJobTextPaste"
+                            rows="4"
+                            :placeholder="waitingForPaste ? 'Paste here (Ctrl+V) — analysis starts automatically...' : 'Paste job page content here...'"
+                            class="input-field text-sm leading-relaxed resize-y"
+                            :class="waitingForPaste && !analysis ? 'border-purple-500/40 ring-1 ring-purple-500/20' : ''"
+                        ></textarea>
+
+                        <button
+                            @click="analyzeJob"
+                            :disabled="isAnalyzing || jobText.trim().length < 20"
+                            class="w-full py-3 text-sm font-medium rounded-xl inline-flex items-center justify-center transition-all border border-purple-500/30 bg-purple-500/10 text-purple-400 hover:bg-purple-500/20 mt-3"
+                            :class="{ 'opacity-50 pointer-events-none': isAnalyzing || jobText.trim().length < 20 }"
+                        >
+                            <svg v-if="!isAnalyzing" class="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456z" />
+                            </svg>
+                            <svg v-else class="animate-spin w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            {{ isAnalyzing ? 'Analyzing with AI...' : 'Scan for Red Flags' }}
+                        </button>
+                    </div>
+
+                    <!-- Error -->
+                    <div v-if="analysisError" class="mt-4 p-4 rounded-xl bg-red-500/5 border border-red-500/20">
+                        <p class="text-sm text-red-400">{{ analysisError }}</p>
+                    </div>
+
+                    <!-- Analysis Results -->
+                    <div v-if="analysis" class="mt-5 space-y-4">
+                        <!-- Verdict Banner -->
+                        <div class="p-4 rounded-xl border" :class="verdictStyle(analysis.verdict)">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <p class="text-xs font-medium uppercase tracking-wider opacity-70">Verdict</p>
+                                    <p class="text-lg font-bold mt-0.5">{{ analysis.verdict }}</p>
+                                </div>
+                                <div class="text-right">
+                                    <p class="text-xs font-medium uppercase tracking-wider opacity-70">Score</p>
+                                    <p class="text-2xl font-bold mt-0.5">{{ analysis.overall_score }}<span class="text-sm opacity-50">/10</span></p>
+                                </div>
+                            </div>
+                            <p class="text-sm mt-3 opacity-80">{{ analysis.summary }}</p>
+                        </div>
+
+                        <!-- Flags List -->
+                        <div class="space-y-2">
+                            <p class="text-xs font-medium text-surface-400 uppercase tracking-wider">Red Flag Analysis</p>
+                            <div
+                                v-for="(flag, i) in analysis.flags"
+                                :key="i"
+                                class="flex items-start gap-3 p-3 rounded-lg border"
+                                :class="[flagColor(flag.level).bg, flagColor(flag.level).border]"
+                            >
+                                <span class="text-sm mt-0.5 flex-shrink-0">{{ flagColor(flag.level).icon }}</span>
+                                <div class="min-w-0">
+                                    <p class="text-sm font-medium" :class="flagColor(flag.level).text">{{ flag.label }}</p>
+                                    <p class="text-xs text-surface-400 mt-0.5">{{ flag.detail }}</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -888,16 +1058,16 @@ onUnmounted(() => {
                             {{ f.label }}
                         </button>
 
-                        <div class="flex items-center gap-2 ml-auto">
-                            <input type="date" v-model="customFrom" class="input-field text-xs py-1.5 px-2.5 w-32" />
+                        <div class="flex flex-wrap items-center gap-2 w-full sm:w-auto sm:ml-auto mt-2 sm:mt-0">
+                            <input type="date" v-model="customFrom" class="input-field text-xs py-1.5 px-2.5 w-[calc(50%-20px)] sm:w-32" />
                             <span class="text-xs text-surface-500">to</span>
-                            <input type="date" v-model="customTo" class="input-field text-xs py-1.5 px-2.5 w-32" />
-                            <button @click="applyCustomRange" class="btn-secondary text-xs px-3 py-1.5">Apply</button>
+                            <input type="date" v-model="customTo" class="input-field text-xs py-1.5 px-2.5 w-[calc(50%-20px)] sm:w-32" />
+                            <button @click="applyCustomRange" class="btn-secondary text-xs px-3 py-1.5 w-full sm:w-auto">Apply</button>
                         </div>
                     </div>
 
                     <!-- Status filter row -->
-                    <div class="flex items-center gap-2 mt-3 pt-3 border-t border-surface-700/30">
+                    <div class="flex flex-wrap items-center gap-2 mt-3 pt-3 border-t border-surface-700/30">
                         <span class="text-xs font-medium text-surface-400 mr-1">Status:</span>
                         <button
                             v-for="s in [{key:'',label:'All'},{key:'Submitted',label:'Submitted'},{key:'Interviewing',label:'Interviewing'},{key:'Hired',label:'Hired'},{key:'Rejected',label:'Rejected'}]"
@@ -928,7 +1098,7 @@ onUnmounted(() => {
                             <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
                         </svg>
                         <p class="text-sm text-surface-400">No proposals found for this filter.</p>
-                        <p class="text-xs text-surface-600 mt-1">Submit your first bid using the URL Checker tab.</p>
+                        <p class="text-xs text-surface-600 mt-1">Submit your first bid using the Submit Job tab.</p>
                     </div>
 
                     <!-- Table -->
@@ -1001,16 +1171,16 @@ onUnmounted(() => {
                 <!-- Month navigation + summary -->
                 <div class="card p-4 mb-4">
                     <div class="flex items-center justify-between">
-                        <div class="flex items-center gap-3">
-                            <button @click="prevMonth" class="btn-ghost p-2">
+                        <div class="flex items-center gap-2 sm:gap-3">
+                            <button @click="prevMonth" class="btn-ghost p-1.5 sm:p-2">
                                 <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                                     <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
                                 </svg>
                             </button>
-                            <h2 class="text-base font-semibold text-surface-100 min-w-[160px] text-center">
+                            <h2 class="text-sm sm:text-base font-semibold text-surface-100 min-w-[120px] sm:min-w-[160px] text-center">
                                 {{ attendanceMonthName }} {{ attendanceYear }}
                             </h2>
-                            <button @click="nextMonth" class="btn-ghost p-2" :class="{ 'opacity-30 pointer-events-none': isCurrentMonth }">
+                            <button @click="nextMonth" class="btn-ghost p-1.5 sm:p-2" :class="{ 'opacity-30 pointer-events-none': isCurrentMonth }">
                                 <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                                     <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
                                 </svg>
@@ -1030,6 +1200,22 @@ onUnmounted(() => {
                                 <span class="w-2.5 h-2.5 rounded-sm bg-surface-700/50"></span>
                                 <span class="text-surface-400">Weekend</span>
                             </div>
+                        </div>
+                    </div>
+
+                    <!-- Mobile legend -->
+                    <div class="flex sm:hidden items-center justify-center gap-4 mt-3 text-[10px]">
+                        <div class="flex items-center gap-1">
+                            <span class="w-2 h-2 rounded-sm bg-brand/30"></span>
+                            <span class="text-surface-400">Present</span>
+                        </div>
+                        <div class="flex items-center gap-1">
+                            <span class="w-2 h-2 rounded-sm bg-red-500/40"></span>
+                            <span class="text-surface-400">Absent</span>
+                        </div>
+                        <div class="flex items-center gap-1">
+                            <span class="w-2 h-2 rounded-sm bg-surface-700/50"></span>
+                            <span class="text-surface-400">Weekend</span>
                         </div>
                     </div>
 
@@ -1062,8 +1248,8 @@ onUnmounted(() => {
                     </svg>
                 </div>
 
-                <!-- Attendance sheet -->
-                <div v-else class="card overflow-hidden">
+                <!-- Attendance sheet - Desktop table -->
+                <div v-else class="card overflow-hidden hidden sm:block">
                     <table class="w-full">
                         <thead>
                             <tr class="border-b border-surface-700/30">
@@ -1071,7 +1257,7 @@ onUnmounted(() => {
                                 <th class="px-4 py-3 text-left table-header">Date</th>
                                 <th class="px-4 py-3 text-left table-header">Status</th>
                                 <th class="px-4 py-3 text-left table-header">Hours Worked</th>
-                                <th class="px-4 py-3 text-left table-header hidden sm:table-cell">Sessions</th>
+                                <th class="px-4 py-3 text-left table-header">Sessions</th>
                                 <th class="px-4 py-3 text-right table-header w-10"></th>
                             </tr>
                         </thead>
@@ -1114,7 +1300,7 @@ onUnmounted(() => {
                                         <span v-else-if="day.status === 'absent'" class="text-xs text-red-400/60">0h</span>
                                         <span v-else class="text-xs text-surface-600">--</span>
                                     </td>
-                                    <td class="px-4 py-3 text-surface-500 text-xs hidden sm:table-cell">
+                                    <td class="px-4 py-3 text-surface-500 text-xs">
                                         <span v-if="day.sessions.length > 0">{{ day.sessions.length }} session{{ day.sessions.length > 1 ? 's' : '' }}</span>
                                     </td>
                                     <td class="px-4 py-3 text-right">
@@ -1159,6 +1345,75 @@ onUnmounted(() => {
                             </template>
                         </tbody>
                     </table>
+                </div>
+
+                <!-- Attendance sheet - Mobile card layout -->
+                <div v-if="!isLoadingAttendance" class="sm:hidden space-y-2">
+                    <template v-for="day in attendanceDays" :key="'m-'+day.date">
+                        <div
+                            class="card p-3 transition-colors"
+                            :class="{
+                                'bg-red-500/[0.04]': day.status === 'absent',
+                                'opacity-40': day.status === 'future' || day.status === 'na',
+                            }"
+                            @click="day.sessions.length > 0 ? toggleDayDetail(day.date) : null"
+                        >
+                            <div class="flex items-center justify-between">
+                                <div class="flex items-center gap-2.5">
+                                    <span class="font-mono text-xs text-surface-500 w-6">{{ String(day.day).padStart(2, '0') }}</span>
+                                    <div>
+                                        <span class="text-sm text-surface-200 font-medium">{{ day.day_name }}</span>
+                                        <span class="text-surface-600 ml-1.5 text-xs">{{ day.date }}</span>
+                                    </div>
+                                </div>
+                                <div class="flex items-center gap-2.5">
+                                    <span v-if="day.status === 'present'" class="badge-success text-[10px]">Present</span>
+                                    <span v-else-if="day.status === 'absent'" class="badge-danger text-[10px]">Absent</span>
+                                    <span v-else-if="day.status === 'weekend'" class="badge-neutral text-[10px]">Weekend</span>
+                                    <span v-else class="text-[10px] text-surface-600">--</span>
+                                    <svg v-if="day.sessions.length > 0" class="w-3.5 h-3.5 text-surface-600 transition-transform" :class="{ 'rotate-180': expandedDay === day.date }" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+                                    </svg>
+                                </div>
+                            </div>
+                            <div v-if="day.status === 'present'" class="flex items-center gap-2 mt-2">
+                                <div class="flex-1 h-1.5 rounded-full bg-surface-700/50 overflow-hidden">
+                                    <div
+                                        class="h-full rounded-full transition-all duration-300"
+                                        :class="day.hours >= 8 ? 'bg-brand' : day.hours >= 4 ? 'bg-amber-400' : 'bg-red-400'"
+                                        :style="{ width: Math.min(day.hours / 8 * 100, 100) + '%' }"
+                                    ></div>
+                                </div>
+                                <span class="font-mono text-xs font-medium flex-shrink-0" :class="day.hours >= 8 ? 'text-brand' : day.hours >= 4 ? 'text-amber-400' : 'text-red-400'">
+                                    {{ formatHours(day.hours) }}
+                                </span>
+                                <span v-if="day.sessions.length > 0" class="text-[10px] text-surface-500 flex-shrink-0">{{ day.sessions.length }}s</span>
+                            </div>
+
+                            <!-- Mobile expanded sessions -->
+                            <div v-if="expandedDay === day.date && day.sessions.length > 0" class="mt-3 pt-3 border-t border-surface-800/30 space-y-2">
+                                <div v-for="(session, i) in day.sessions" :key="i">
+                                    <div class="flex items-center gap-2 text-xs">
+                                        <span class="text-surface-500">{{ i + 1 }}.</span>
+                                        <span class="font-mono text-surface-300">{{ toLocalTimeShort(session.in) || '--' }}</span>
+                                        <svg class="w-3 h-3 text-surface-600 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" /></svg>
+                                        <span class="font-mono" :class="session.out ? 'text-surface-300' : 'text-emerald-400'">{{ session.out ? toLocalTimeShort(session.out) : 'Active' }}</span>
+                                        <span class="text-surface-500 ml-auto">{{ formatHours(session.hours) }}</span>
+                                    </div>
+                                    <div v-if="session.in_location || session.out_location" class="ml-4 mt-1 space-y-1">
+                                        <div v-if="session.in_location" class="flex items-center gap-1 text-[10px] text-surface-500">
+                                            <svg class="w-3 h-3 text-emerald-500/60 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1 1 15 0Z"/></svg>
+                                            <span class="truncate">{{ session.in_location.address || `${session.in_location.lat}, ${session.in_location.lng}` }}</span>
+                                        </div>
+                                        <div v-if="session.out_location" class="flex items-center gap-1 text-[10px] text-surface-500">
+                                            <svg class="w-3 h-3 text-red-500/60 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1 1 15 0Z"/></svg>
+                                            <span class="truncate">{{ session.out_location.address || `${session.out_location.lat}, ${session.out_location.lng}` }}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
                 </div>
             </div>
 

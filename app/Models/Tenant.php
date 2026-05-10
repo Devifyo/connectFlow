@@ -8,4 +8,8 @@ class Tenant extends Model
 {
     protected $guarded = [];
     protected $primaryKey = 'tenant_id';
+
+    protected $casts = [
+        'agency_profile' => 'array',
+    ];
 }

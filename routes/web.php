@@ -36,6 +36,8 @@ Route::middleware('auth')->group(function () {
     // Bidder Routes
     Route::post('/api/bids/check', [\App\Http\Controllers\BidController::class, 'checkCollision']);
     Route::post('/api/bids/submit', [\App\Http\Controllers\BidController::class, 'submit']);
+    Route::post('/api/bids/analyze-job', [\App\Http\Controllers\BidController::class, 'analyzeJob']);
+    Route::get('/api/agency-profile', [\App\Http\Controllers\TenantAdminController::class, 'getAgencyProfile']);
     Route::get('/api/bids/mine', [\App\Http\Controllers\BidController::class, 'myBids']);
     Route::post('/api/time/punch-in', [\App\Http\Controllers\TimeLogController::class, 'punchIn']);
     Route::post('/api/time/punch-out', [\App\Http\Controllers\TimeLogController::class, 'punchOut']);
@@ -54,6 +56,8 @@ Route::middleware('auth')->group(function () {
         Route::delete('/api/admin/bidders/{id}/attendance', [\App\Http\Controllers\TenantAdminController::class, 'removeDayOverride']);
         Route::post('/api/admin/impersonate/{id}', [\App\Http\Controllers\TenantAdminController::class, 'impersonate']);
         Route::get('/api/admin/reports/efficiency', [\App\Http\Controllers\TenantAdminController::class, 'efficiency']);
+        Route::get('/api/admin/agency-profile', [\App\Http\Controllers\TenantAdminController::class, 'getAgencyProfile']);
+        Route::post('/api/admin/agency-profile', [\App\Http\Controllers\TenantAdminController::class, 'updateAgencyProfile']);
         Route::put('/api/admin/bids/{id}/status', [\App\Http\Controllers\TenantAdminController::class, 'updateBidStatus']);
     });
 

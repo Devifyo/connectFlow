@@ -395,9 +395,32 @@ async function removeDayOverride(date) {
     } catch (e) {}
 }
 
+// --- Agency Profile ---
+const agencyProfile = ref({ skills: '', tech_stack: '', description: '', can_build: '' });
+const agencySaving = ref(false);
+const agencySaved = ref(false);
+
+async function fetchAgencyProfile() {
+    try {
+        const { data } = await axios.get('/api/admin/agency-profile');
+        agencyProfile.value = { skills: data.skills || '', tech_stack: data.tech_stack || '', description: data.description || '', can_build: data.can_build || '' };
+    } catch {}
+}
+
+async function saveAgencyProfile() {
+    agencySaving.value = true;
+    agencySaved.value = false;
+    try {
+        await axios.post('/api/admin/agency-profile', agencyProfile.value);
+        agencySaved.value = true;
+        setTimeout(() => { agencySaved.value = false; }, 2500);
+    } catch {}
+    finally { agencySaving.value = false; }
+}
+
 onMounted(async () => {
     ready.value = true;
-    await Promise.all([fetchPipelineData(), fetchTeamData()]);
+    await Promise.all([fetchPipelineData(), fetchTeamData(), fetchAgencyProfile()]);
     loading.value = false;
     fetchUnreadCount();
     startHeartbeat();
@@ -456,6 +479,14 @@ onUnmounted(() => {
                     </svg>
                     Reports
                 </button>
+                <button @click="activeTab = 'agency'"
+                    :class="activeTab === 'agency' ? 'bg-surface-800/60 text-surface-100' : 'text-surface-400 hover:text-surface-200 hover:bg-surface-800/30'"
+                    class="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors">
+                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
+                    </svg>
+                    Agency Profile
+                </button>
             </nav>
 
             <div class="p-4 border-t border-surface-800/50">
@@ -507,7 +538,7 @@ onUnmounted(() => {
                 </div>
                 <!-- Mobile tab bar -->
                 <div class="px-4 pb-2 flex gap-1">
-                    <button v-for="tab in ['pipeline', 'team', 'reports']" :key="tab"
+                    <button v-for="tab in ['pipeline', 'team', 'reports', 'agency']" :key="tab"
                         @click="activeTab = tab"
                         :class="activeTab === tab ? 'bg-surface-700 text-surface-100' : 'text-surface-400'"
                         class="flex-1 py-1.5 rounded-md text-xs font-medium capitalize transition-colors text-center">
@@ -844,21 +875,21 @@ onUnmounted(() => {
                     <div v-if="viewMember" class="fixed inset-0 z-[100] flex items-center justify-center p-4"
                         @click.self="closeMemberProfile()">
                         <div class="fixed inset-0 bg-black/60 backdrop-blur-sm"></div>
-                        <div class="relative bg-surface-900 border border-surface-700/50 rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col animate-slide-up">
+                        <div class="relative bg-surface-900 border border-surface-700/50 rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col animate-slide-up overflow-hidden">
                             <!-- Modal Header -->
-                            <div class="flex items-center justify-between px-6 py-4 border-b border-surface-800/50 flex-shrink-0">
-                                <div class="flex items-center gap-3">
-                                    <div class="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold"
+                            <div class="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 border-b border-surface-800/50 flex-shrink-0">
+                                <div class="flex items-center gap-2.5 sm:gap-3 min-w-0">
+                                    <div class="w-8 h-8 sm:w-10 sm:h-10 rounded-full flex items-center justify-center text-xs sm:text-sm font-bold flex-shrink-0"
                                         :class="getUserColor(viewMember.name)">
                                         {{ viewMember.name.charAt(0).toUpperCase() }}
                                     </div>
-                                    <div>
-                                        <h3 class="text-lg font-semibold text-surface-100">{{ viewMember.name }}</h3>
-                                        <p class="text-xs text-surface-500">{{ viewMember.employee_id || 'No ID' }} &middot; {{ viewMember.designation || 'Bidder' }}</p>
+                                    <div class="min-w-0">
+                                        <h3 class="text-base sm:text-lg font-semibold text-surface-100 truncate">{{ viewMember.name }}</h3>
+                                        <p class="text-[10px] sm:text-xs text-surface-500 truncate">{{ viewMember.employee_id || 'No ID' }} &middot; {{ viewMember.designation || 'Bidder' }}</p>
                                     </div>
                                 </div>
                                 <button @click="closeMemberProfile()"
-                                    class="w-8 h-8 rounded-lg bg-surface-800/50 flex items-center justify-center text-surface-400 hover:text-surface-200 hover:bg-surface-800 transition-colors">
+                                    class="w-8 h-8 rounded-lg bg-surface-800/50 flex items-center justify-center text-surface-400 hover:text-surface-200 hover:bg-surface-800 transition-colors flex-shrink-0">
                                     <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                                         <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
                                     </svg>
@@ -866,7 +897,7 @@ onUnmounted(() => {
                             </div>
 
                             <!-- Tab switcher -->
-                            <div class="px-6 pt-3 pb-0 flex gap-1 border-b border-surface-800/50 flex-shrink-0">
+                            <div class="px-4 sm:px-6 pt-3 pb-0 flex gap-1 border-b border-surface-800/50 flex-shrink-0">
                                 <button @click="memberViewTab = 'report'"
                                     :class="memberViewTab === 'report' ? 'text-brand border-brand' : 'text-surface-400 border-transparent hover:text-surface-200'"
                                     class="px-4 py-2 text-xs font-medium border-b-2 -mb-px transition-colors">
@@ -880,7 +911,7 @@ onUnmounted(() => {
                             </div>
 
                             <!-- Modal Body -->
-                            <div class="flex-1 overflow-y-auto px-6 py-5">
+                            <div class="flex-1 overflow-y-auto px-4 sm:px-6 py-4 sm:py-5">
                                 <!-- Profile Info -->
                                 <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
                                     <div class="rounded-lg bg-surface-800/40 border border-surface-700/20 p-3 text-center">
@@ -1001,7 +1032,7 @@ onUnmounted(() => {
                                 <div v-show="memberViewTab === 'attendance'">
                                 <div class="border border-surface-700/30 rounded-xl overflow-hidden">
                                     <!-- Month navigation -->
-                                    <div class="px-4 py-3 bg-surface-800/30 border-b border-surface-700/30 flex items-center justify-between">
+                                    <div class="px-3 sm:px-4 py-2.5 sm:py-3 bg-surface-800/30 border-b border-surface-700/30 flex items-center justify-between">
                                         <button @click="changeAttMonth(-1)" class="w-7 h-7 rounded-md bg-surface-700/50 flex items-center justify-center text-surface-400 hover:text-surface-200 hover:bg-surface-700 transition-colors">
                                             <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                                                 <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
@@ -1023,22 +1054,22 @@ onUnmounted(() => {
                                     </div>
 
                                     <!-- Attendance summary -->
-                                    <div v-else-if="memberAttendance" class="p-4">
-                                        <div class="grid grid-cols-4 gap-3 mb-4">
-                                            <div class="text-center">
-                                                <p class="text-lg font-bold text-emerald-400">{{ memberAttendance.summary.present_days }}</p>
+                                    <div v-else-if="memberAttendance" class="p-3 sm:p-4">
+                                        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3 mb-4">
+                                            <div class="text-center p-2 rounded-lg bg-surface-800/30">
+                                                <p class="text-base sm:text-lg font-bold text-emerald-400">{{ memberAttendance.summary.present_days }}</p>
                                                 <p class="text-[10px] text-surface-500">Present</p>
                                             </div>
-                                            <div class="text-center">
-                                                <p class="text-lg font-bold text-red-400">{{ memberAttendance.summary.absent_days }}</p>
+                                            <div class="text-center p-2 rounded-lg bg-surface-800/30">
+                                                <p class="text-base sm:text-lg font-bold text-red-400">{{ memberAttendance.summary.absent_days }}</p>
                                                 <p class="text-[10px] text-surface-500">Absent</p>
                                             </div>
-                                            <div class="text-center">
-                                                <p class="text-lg font-bold text-surface-200">{{ memberAttendance.summary.total_worked_hours }}h</p>
+                                            <div class="text-center p-2 rounded-lg bg-surface-800/30">
+                                                <p class="text-base sm:text-lg font-bold text-surface-200">{{ memberAttendance.summary.total_worked_hours }}h</p>
                                                 <p class="text-[10px] text-surface-500">Total Hours</p>
                                             </div>
-                                            <div class="text-center">
-                                                <p class="text-lg font-bold text-surface-200">{{ memberAttendance.summary.avg_hours_per_day }}h</p>
+                                            <div class="text-center p-2 rounded-lg bg-surface-800/30">
+                                                <p class="text-base sm:text-lg font-bold text-surface-200">{{ memberAttendance.summary.avg_hours_per_day }}h</p>
                                                 <p class="text-[10px] text-surface-500">Avg/Day</p>
                                             </div>
                                         </div>
@@ -1075,12 +1106,12 @@ onUnmounted(() => {
                                         </div>
 
                                         <!-- Day Edit Panel -->
-                                        <div v-if="dayEditOpen" class="mt-4 p-4 rounded-xl bg-surface-800/50 border border-surface-700/30">
+                                        <div v-if="dayEditOpen" class="mt-4 p-3 sm:p-4 rounded-xl bg-surface-800/50 border border-surface-700/30">
                                             <div class="flex items-center justify-between mb-3">
-                                                <h4 class="text-sm font-semibold text-surface-200">Edit: {{ dayEditOpen }}</h4>
+                                                <h4 class="text-xs sm:text-sm font-semibold text-surface-200">Edit: {{ dayEditOpen }}</h4>
                                                 <button @click="dayEditOpen = null" class="text-xs text-surface-500 hover:text-surface-300">&times; Close</button>
                                             </div>
-                                            <div class="grid grid-cols-3 gap-3">
+                                            <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3">
                                                 <div>
                                                     <label class="block text-[10px] font-medium text-surface-500 mb-1">Status</label>
                                                     <select v-model="dayEditForm.status" class="input-field w-full text-xs">
@@ -1101,7 +1132,7 @@ onUnmounted(() => {
                                                         class="input-field w-full text-xs" placeholder="Optional" />
                                                 </div>
                                             </div>
-                                            <div class="flex items-center gap-2 mt-3">
+                                            <div class="flex flex-wrap items-center gap-2 mt-3">
                                                 <button @click="saveDayEdit" :disabled="dayEditLoading"
                                                     class="btn-primary text-xs px-4 py-1.5">
                                                     {{ dayEditLoading ? 'Saving...' : 'Save' }}
@@ -1116,8 +1147,8 @@ onUnmounted(() => {
                                             <div v-if="selectedDaySessions.length > 0" class="mt-4 pt-3 border-t border-surface-700/30">
                                                 <p class="text-[10px] font-semibold text-surface-500 uppercase tracking-wider mb-2">Sessions</p>
                                                 <div class="space-y-3">
-                                                    <div v-for="(s, si) in selectedDaySessions" :key="si" class="p-3 rounded-lg bg-surface-900/50 border border-surface-700/20">
-                                                        <div class="flex items-center gap-3 text-xs">
+                                                    <div v-for="(s, si) in selectedDaySessions" :key="si" class="p-2.5 sm:p-3 rounded-lg bg-surface-900/50 border border-surface-700/20">
+                                                        <div class="flex flex-wrap items-center gap-2 sm:gap-3 text-xs">
                                                             <span class="text-surface-500 w-3">{{ si + 1 }}.</span>
                                                             <span class="font-mono text-emerald-400">{{ s.in ? new Date(s.in).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--' }}</span>
                                                             <svg class="w-3 h-3 text-surface-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>
@@ -1373,6 +1404,53 @@ onUnmounted(() => {
                                 </tr>
                             </tbody>
                         </table>
+                    </div>
+                </div>
+            </main>
+
+            <!-- Agency Profile Tab -->
+            <main v-else-if="activeTab === 'agency'" class="flex-1 p-6 overflow-auto" :class="{ 'animate-fade-in': ready }">
+                <div class="max-w-2xl">
+                    <p class="text-sm text-surface-400 mb-6">Define your agency's capabilities. The AI Job Analyzer will use this to check if jobs match your team's skills.</p>
+
+                    <div class="space-y-5">
+                        <div>
+                            <label class="block text-xs font-medium text-surface-400 mb-1.5">Agency Description</label>
+                            <textarea v-model="agencyProfile.description" rows="3"
+                                placeholder="e.g. We are a full-stack web development agency specializing in SaaS products, e-commerce, and enterprise solutions."
+                                class="input-field text-sm leading-relaxed resize-y"></textarea>
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-medium text-surface-400 mb-1.5">Skills</label>
+                            <input v-model="agencyProfile.skills" type="text"
+                                placeholder="e.g. Web Development, Mobile Apps, UI/UX Design, API Integration, DevOps"
+                                class="input-field text-sm" />
+                            <p class="text-[11px] text-surface-500 mt-1">Comma-separated list of your agency's core skills</p>
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-medium text-surface-400 mb-1.5">Tech Stack</label>
+                            <input v-model="agencyProfile.tech_stack" type="text"
+                                placeholder="e.g. Laravel, Vue.js, React, Node.js, Flutter, AWS, Docker, MySQL, PostgreSQL"
+                                class="input-field text-sm" />
+                            <p class="text-[11px] text-surface-500 mt-1">Technologies and frameworks your team works with</p>
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-medium text-surface-400 mb-1.5">What We Can Build</label>
+                            <textarea v-model="agencyProfile.can_build" rows="3"
+                                placeholder="e.g. SaaS platforms, e-commerce stores, CRM/ERP systems, REST APIs, mobile apps, admin dashboards, payment integrations, real-time chat systems"
+                                class="input-field text-sm leading-relaxed resize-y"></textarea>
+                        </div>
+
+                        <div class="flex items-center gap-3">
+                            <button @click="saveAgencyProfile" :disabled="agencySaving"
+                                class="btn-primary text-sm py-2.5 px-6" :class="{ 'opacity-50': agencySaving }">
+                                {{ agencySaving ? 'Saving...' : 'Save Profile' }}
+                            </button>
+                            <span v-if="agencySaved" class="text-sm text-emerald-400 font-medium">Saved!</span>
+                        </div>
                     </div>
                 </div>
             </main>
