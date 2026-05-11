@@ -24,7 +24,9 @@ class AppServiceProvider extends ServiceProvider
         Vite::prefetch(concurrency: 3);
 
         Gate::define('manage-pipeline', function ($user) {
-            return $user->hasRole(['TenantAdmin', 'SuperAdmin']) || $user->designation === 'Senior BDE';
+            return $user->hasRole(['TenantAdmin', 'SuperAdmin'])
+                || $user->designation === 'Senior BDE'
+                || $user->positions()->where('title', 'like', '%Senior%')->exists();
         });
     }
 }

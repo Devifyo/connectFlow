@@ -22,7 +22,7 @@ class MessageController extends Controller
 
         $conversations = $user->conversations()
             ->with(['latestMessage.sender', 'latestMessage.attachments', 'participants' => function ($q) use ($user) {
-                $q->where('user_id', '!=', $user->id);
+                $q->where('user_id', '!=', $user->id)->with(['positions' => fn ($q) => $q->select('id', 'title', 'sort_order')->orderBy('sort_order')]);
             }])
             ->get()
             ->map(function ($conversation) use ($user) {
@@ -45,6 +45,8 @@ class MessageController extends Controller
                         'id' => $other->id,
                         'name' => $other->name,
                         'profile_picture_url' => $other->profile_picture_url,
+                        'designation' => $other->designation,
+                        'positions' => $other->positions->map(fn ($p) => ['id' => $p->id, 'title' => $p->title]),
                         'presence_status' => $this->resolvePresence($other),
                         'last_active_at' => $other->last_active_at?->toIso8601String(),
                     ] : null,
@@ -77,8 +79,16 @@ class MessageController extends Controller
             ->where('is_active', true)
             ->where('name', 'like', "%{$query}%")
             ->select('id', 'name', 'designation', 'profile_picture')
+            ->with(['positions' => fn ($q) => $q->select('id', 'title', 'sort_order')->orderBy('sort_order')])
             ->limit(10)
-            ->get();
+            ->get()
+            ->map(fn ($u) => [
+                'id' => $u->id,
+                'name' => $u->name,
+                'designation' => $u->designation,
+                'profile_picture_url' => $u->profile_picture_url,
+                'positions' => $u->positions->map(fn ($p) => ['id' => $p->id, 'title' => $p->title]),
+            ]);
 
         return response()->json($users);
     }

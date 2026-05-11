@@ -139,29 +139,35 @@ function truncateUrl(url, max = 40) {
 // --- Add Member ---
 const showAddMember = ref(false);
 const addMemberForm = ref({
-    name: '', email: '', password: '', designation: 'BDE Bidder',
+    name: '', email: '', password: '', position_ids: [],
     joining_date: new Date().toISOString().split('T')[0],
     salary: '', min_hours_per_day: '8',
 });
 const addMemberErrors = ref({});
 const addMemberError = ref('');
 const addMemberLoading = ref(false);
-const designations = ['Intern BDE', 'BDE Bidder', 'Senior BDE'];
 
-const designationBadge = {
-    'Intern BDE': 'bg-sky-500/10 text-sky-400',
-    'BDE Bidder': 'bg-violet-500/10 text-violet-400',
-    'Senior BDE': 'bg-amber-500/10 text-amber-400',
-};
+const positionColors = ['sky', 'violet', 'amber', 'emerald', 'rose', 'cyan', 'indigo', 'orange', 'teal', 'fuchsia'];
+function getPositionBadge(title) {
+    const idx = (title || '').charCodeAt(0) % positionColors.length;
+    const c = positionColors[idx];
+    return `bg-${c}-500/10 text-${c}-400`;
+}
 
 function resetMemberForm() {
     addMemberForm.value = {
-        name: '', email: '', password: '', designation: 'BDE Bidder',
+        name: '', email: '', password: '', position_ids: [],
         joining_date: new Date().toISOString().split('T')[0],
         salary: '', min_hours_per_day: '8',
     };
     addMemberErrors.value = {};
     addMemberError.value = '';
+}
+
+function togglePositionSelection(posId, formRef) {
+    const idx = formRef.indexOf(posId);
+    if (idx === -1) formRef.push(posId);
+    else formRef.splice(idx, 1);
 }
 
 function validateMemberForm() {
@@ -171,6 +177,7 @@ function validateMemberForm() {
     if (!f.email || !f.email.trim()) errors.email = 'Email is required';
     else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email)) errors.email = 'Invalid email format';
     if (!f.password || f.password.length < 6) errors.password = 'Minimum 6 characters';
+    if (!f.position_ids || f.position_ids.length === 0) errors.position_ids = 'At least one position is required';
     if (!f.joining_date) errors.joining_date = 'Joining date is required';
     const salaryNum = Number(f.salary);
     if (isNaN(salaryNum) || salaryNum <= 0) errors.salary = 'Salary must be greater than 0';
@@ -187,6 +194,7 @@ async function addMember() {
     try {
         await axios.post('/api/admin/bidders', {
             ...addMemberForm.value,
+            position_ids: addMemberForm.value.position_ids.map(Number),
             salary: Number(addMemberForm.value.salary),
             min_hours_per_day: Number(addMemberForm.value.min_hours_per_day),
         });
@@ -205,13 +213,6 @@ async function addMember() {
     } finally {
         addMemberLoading.value = false;
     }
-}
-
-async function updateMemberDesignation(id, designation) {
-    try {
-        await axios.put(`/api/admin/bidders/${id}`, { designation });
-        await fetchTeamData();
-    } catch (e) {}
 }
 
 async function toggleMemberActive(id, isActive) {
@@ -242,7 +243,7 @@ const editLoading = ref(false);
 function openEditMember(bidder) {
     editMember.value = bidder;
     editForm.value = {
-        designation: bidder.designation || 'BDE Bidder',
+        position_ids: (bidder.positions || []).map(p => p.id),
         salary: bidder.salary || '',
         min_hours_per_day: bidder.min_hours_per_day || '8',
     };
@@ -267,7 +268,7 @@ async function saveEditMember() {
     editLoading.value = true;
     try {
         await axios.put(`/api/admin/bidders/${editMember.value.id}`, {
-            designation: editForm.value.designation,
+            position_ids: editForm.value.position_ids.map(Number),
             salary: Number(editForm.value.salary),
             min_hours_per_day: Number(editForm.value.min_hours_per_day),
         });
@@ -396,6 +397,153 @@ async function removeDayOverride(date) {
     } catch (e) {}
 }
 
+// --- Positions ---
+const positions = ref([]);
+const positionsLoading = ref(false);
+const showAddPosition = ref(false);
+const addPositionForm = ref({ title: '', description: '' });
+const addPositionErrors = ref({});
+const addPositionLoading = ref(false);
+const editPosition = ref(null);
+const editPositionForm = ref({ title: '', description: '' });
+const editPositionErrors = ref({});
+const editPositionLoading = ref(false);
+const deleteConfirm = ref(null);
+const deleteLoading = ref(false);
+
+async function fetchPositions() {
+    positionsLoading.value = true;
+    try {
+        const { data } = await axios.get('/api/admin/positions');
+        positions.value = data.positions;
+    } catch (e) {} finally { positionsLoading.value = false; }
+}
+
+function resetPositionForm() {
+    addPositionForm.value = { title: '', description: '' };
+    addPositionErrors.value = {};
+}
+
+async function addPosition() {
+    addPositionErrors.value = {};
+    if (!addPositionForm.value.title.trim()) {
+        addPositionErrors.value.title = 'Title is required';
+        return;
+    }
+    addPositionLoading.value = true;
+    try {
+        await axios.post('/api/admin/positions', addPositionForm.value);
+        showAddPosition.value = false;
+        resetPositionForm();
+        await fetchPositions();
+    } catch (e) {
+        if (e.response?.status === 422) {
+            addPositionErrors.value.title = e.response.data.message || 'Validation error';
+        }
+    } finally { addPositionLoading.value = false; }
+}
+
+function openEditPosition(pos) {
+    editPosition.value = pos;
+    editPositionForm.value = { title: pos.title, description: pos.description || '' };
+    editPositionErrors.value = {};
+}
+
+async function saveEditPosition() {
+    editPositionErrors.value = {};
+    if (!editPositionForm.value.title.trim()) {
+        editPositionErrors.value.title = 'Title is required';
+        return;
+    }
+    editPositionLoading.value = true;
+    try {
+        await axios.put(`/api/admin/positions/${editPosition.value.id}`, editPositionForm.value);
+        editPosition.value = null;
+        await fetchPositions();
+        await fetchTeamData();
+    } catch (e) {
+        if (e.response?.status === 422) {
+            editPositionErrors.value.title = e.response.data.message || 'Validation error';
+        }
+    } finally { editPositionLoading.value = false; }
+}
+
+async function togglePositionActive(pos) {
+    try {
+        await axios.put(`/api/admin/positions/${pos.id}`, { is_active: !pos.is_active });
+        await fetchPositions();
+    } catch (e) {}
+}
+
+async function deletePosition(pos) {
+    deleteLoading.value = true;
+    try {
+        await axios.delete(`/api/admin/positions/${pos.id}`);
+        deleteConfirm.value = null;
+        await fetchPositions();
+    } catch (e) {
+        if (e.response?.status === 422) {
+            alert(e.response.data.message);
+        }
+        deleteConfirm.value = null;
+    } finally { deleteLoading.value = false; }
+}
+
+const activePositions = computed(() => positions.value.filter(p => p.is_active));
+
+// --- Position Drag & Drop ---
+const dragPosId = ref(null);
+const dragOverPosId = ref(null);
+
+function onPosDragStart(e, pos) {
+    dragPosId.value = pos.id;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', pos.id);
+    e.target.closest('[data-pos-item]').style.opacity = '0.4';
+}
+
+function onPosDragEnd(e) {
+    const el = e.target.closest('[data-pos-item]');
+    if (el) el.style.opacity = '1';
+    dragPosId.value = null;
+    dragOverPosId.value = null;
+}
+
+function onPosDragOver(e, pos) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    dragOverPosId.value = pos.id;
+}
+
+function onPosDragLeave(e, pos) {
+    if (!e.currentTarget.contains(e.relatedTarget)) {
+        if (dragOverPosId.value === pos.id) dragOverPosId.value = null;
+    }
+}
+
+async function onPosDrop(e, targetPos) {
+    e.preventDefault();
+    dragOverPosId.value = null;
+    const sourceId = parseInt(e.dataTransfer.getData('text/plain'));
+    if (sourceId === targetPos.id) { dragPosId.value = null; return; }
+
+    const list = [...positions.value];
+    const fromIdx = list.findIndex(p => p.id === sourceId);
+    const toIdx = list.findIndex(p => p.id === targetPos.id);
+    if (fromIdx === -1 || toIdx === -1) { dragPosId.value = null; return; }
+
+    const [moved] = list.splice(fromIdx, 1);
+    list.splice(toIdx, 0, moved);
+    positions.value = list;
+    dragPosId.value = null;
+
+    try {
+        await axios.post('/api/admin/positions/reorder', { ids: list.map(p => p.id) });
+    } catch (e) {
+        await fetchPositions();
+    }
+}
+
 // --- Agency Profile ---
 const agencyProfile = ref({ skills: '', tech_stack: '', description: '', can_build: '' });
 const agencySaving = ref(false);
@@ -521,7 +669,7 @@ async function savePassword() {
 onMounted(async () => {
     ready.value = true;
     loadSettingsForm();
-    await Promise.all([fetchPipelineData(), fetchTeamData(), fetchAgencyProfile()]);
+    await Promise.all([fetchPipelineData(), fetchTeamData(), fetchAgencyProfile(), fetchPositions()]);
     loading.value = false;
     fetchUnreadCount();
     startHeartbeat();
@@ -577,6 +725,14 @@ onUnmounted(() => {
                         <path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" />
                     </svg>
                     Team
+                </button>
+                <button @click="activeTab = 'positions'"
+                    :class="activeTab === 'positions' ? 'bg-surface-800/60 text-surface-100' : 'text-surface-400 hover:text-surface-200 hover:bg-surface-800/30'"
+                    class="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors">
+                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M20.25 14.15v4.25c0 1.094-.787 2.036-1.872 2.18-2.087.277-4.216.42-6.378.42s-4.291-.143-6.378-.42c-1.085-.144-1.872-1.086-1.872-2.18v-4.25m16.5 0a2.18 2.18 0 00.75-1.661V8.706c0-1.081-.768-2.015-1.837-2.175a48.114 48.114 0 00-3.413-.387m4.5 8.006c-.194.165-.42.295-.673.38A23.978 23.978 0 0112 15.75c-2.648 0-5.195-.429-7.577-1.22a2.016 2.016 0 01-.673-.38m0 0A2.18 2.18 0 013 12.489V8.706c0-1.081.768-2.015 1.837-2.175a48.111 48.111 0 013.413-.387m7.5 0V5.25A2.25 2.25 0 0013.5 3h-3a2.25 2.25 0 00-2.25 2.25v.894m7.5 0a48.667 48.667 0 00-7.5 0M12 12.75h.008v.008H12v-.008z" />
+                    </svg>
+                    Positions
                 </button>
                 <button @click="activeTab = 'reports'"
                     :class="activeTab === 'reports' ? 'bg-surface-800/60 text-surface-100' : 'text-surface-400 hover:text-surface-200 hover:bg-surface-800/30'"
@@ -654,7 +810,7 @@ onUnmounted(() => {
                 </div>
                 <!-- Mobile tab bar -->
                 <div class="px-4 pb-2 flex gap-1">
-                    <button v-for="tab in ['pipeline', 'team', 'reports', 'agency', 'settings']" :key="tab"
+                    <button v-for="tab in ['pipeline', 'team', 'positions', 'reports', 'agency', 'settings']" :key="tab"
                         @click="activeTab = tab"
                         :class="activeTab === tab ? 'bg-surface-700 text-surface-100' : 'text-surface-400'"
                         class="flex-1 py-1.5 rounded-md text-xs font-medium capitalize transition-colors text-center">
@@ -843,13 +999,20 @@ onUnmounted(() => {
                                             class="input-field w-full" :class="{ 'border-red-500/50': addMemberErrors.password }" />
                                         <p v-if="addMemberErrors.password" class="text-[11px] text-red-400 mt-1">{{ addMemberErrors.password }}</p>
                                     </div>
-                                    <!-- Designation -->
+                                    <!-- Positions (multi-select) -->
                                     <div>
-                                        <label class="block text-xs font-medium text-surface-400 mb-1.5">Designation *</label>
-                                        <select v-model="addMemberForm.designation"
-                                            class="input-field w-full appearance-none cursor-pointer">
-                                            <option v-for="d in designations" :key="d" :value="d">{{ d }}</option>
-                                        </select>
+                                        <label class="block text-xs font-medium text-surface-400 mb-1.5">Position(s) *</label>
+                                        <div class="input-field w-full min-h-[38px] flex flex-wrap gap-1.5 cursor-pointer"
+                                            :class="{ 'border-red-500/50': addMemberErrors.position_ids }">
+                                            <button v-for="p in activePositions" :key="p.id" type="button"
+                                                @click="togglePositionSelection(p.id, addMemberForm.position_ids)"
+                                                class="text-[11px] font-medium px-2 py-1 rounded-md transition-colors"
+                                                :class="addMemberForm.position_ids.includes(p.id) ? 'bg-brand/20 text-brand ring-1 ring-brand/30' : 'bg-surface-700/50 text-surface-400 hover:text-surface-200'">
+                                                {{ p.title }}
+                                            </button>
+                                        </div>
+                                        <p v-if="addMemberErrors.position_ids" class="text-[11px] text-red-400 mt-1">{{ addMemberErrors.position_ids }}</p>
+                                        <p v-if="activePositions.length === 0" class="text-[11px] text-amber-400 mt-1">No positions created yet. Create one in the Positions tab first.</p>
                                     </div>
                                 </div>
 
@@ -920,13 +1083,17 @@ onUnmounted(() => {
                                 </button>
                             </div>
                             <form @submit.prevent="saveEditMember" class="px-6 py-5 space-y-4">
-                                <!-- Designation -->
+                                <!-- Positions (multi-select) -->
                                 <div>
-                                    <label class="block text-xs font-medium text-surface-400 mb-1.5">Designation</label>
-                                    <select v-model="editForm.designation"
-                                        class="input-field w-full appearance-none cursor-pointer">
-                                        <option v-for="d in designations" :key="d" :value="d">{{ d }}</option>
-                                    </select>
+                                    <label class="block text-xs font-medium text-surface-400 mb-1.5">Position(s)</label>
+                                    <div class="input-field w-full min-h-[38px] flex flex-wrap gap-1.5">
+                                        <button v-for="p in activePositions" :key="p.id" type="button"
+                                            @click="togglePositionSelection(p.id, editForm.position_ids)"
+                                            class="text-[11px] font-medium px-2 py-1 rounded-md transition-colors"
+                                            :class="editForm.position_ids.includes(p.id) ? 'bg-brand/20 text-brand ring-1 ring-brand/30' : 'bg-surface-700/50 text-surface-400 hover:text-surface-200'">
+                                            {{ p.title }}
+                                        </button>
+                                    </div>
                                 </div>
                                 <div class="grid grid-cols-2 gap-4">
                                     <!-- Salary -->
@@ -1001,7 +1168,7 @@ onUnmounted(() => {
                                     </div>
                                     <div class="min-w-0">
                                         <h3 class="text-base sm:text-lg font-semibold text-surface-100 truncate">{{ viewMember.name }}</h3>
-                                        <p class="text-[10px] sm:text-xs text-surface-500 truncate">{{ viewMember.employee_id || 'No ID' }} &middot; {{ viewMember.designation || 'Bidder' }}</p>
+                                        <p class="text-[10px] sm:text-xs text-surface-500 truncate">{{ viewMember.employee_id || 'No ID' }} &middot; {{ viewMember.positions && viewMember.positions.length > 0 ? viewMember.positions.map(p => p.title).join(', ') : (viewMember.designation || 'Bidder') }}</p>
                                     </div>
                                 </div>
                                 <button @click="closeMemberProfile()"
@@ -1338,7 +1505,7 @@ onUnmounted(() => {
                                 <tr class="border-b border-surface-700/30">
                                     <th class="px-4 py-3 text-left table-header">Emp ID</th>
                                     <th class="px-4 py-3 text-left table-header">Member</th>
-                                    <th class="px-4 py-3 text-left table-header">Designation</th>
+                                    <th class="px-4 py-3 text-left table-header">Position</th>
                                     <th class="px-4 py-3 text-left table-header">Status</th>
                                     <th class="px-4 py-3 text-center table-header">Salary</th>
                                     <th class="px-4 py-3 text-center table-header">Min Hrs</th>
@@ -1372,15 +1539,17 @@ onUnmounted(() => {
                                         </div>
                                     </td>
                                     <td class="px-4 py-4">
-                                        <select :value="bidder.designation || ''"
-                                            @change="updateMemberDesignation(bidder.id, $event.target.value)"
-                                            class="text-[11px] font-medium px-2 py-1 rounded-md border-0 cursor-pointer appearance-none"
-                                            :class="designationBadge[bidder.designation] || 'bg-surface-700/50 text-surface-400'"
-                                            style="background-image: none;">
-                                            <option value="" disabled>Set role</option>
-                                            <option v-for="d in designations" :key="d" :value="d"
-                                                class="bg-surface-800 text-surface-200">{{ d }}</option>
-                                        </select>
+                                        <div class="flex flex-wrap gap-1">
+                                            <span v-if="bidder.positions && bidder.positions.length > 0"
+                                                v-for="pos in bidder.positions" :key="pos.id"
+                                                class="text-[11px] font-medium px-2 py-0.5 rounded-md"
+                                                :class="getPositionBadge(pos.title)">
+                                                {{ pos.title }}
+                                            </span>
+                                            <span v-else class="text-[11px] font-medium px-2 py-0.5 rounded-md bg-surface-700/50 text-surface-400">
+                                                {{ bidder.designation || 'Unassigned' }}
+                                            </span>
+                                        </div>
                                     </td>
                                     <td class="px-4 py-4">
                                         <span v-if="!bidder.is_active" class="badge-danger">Disabled</span>
@@ -1420,6 +1589,227 @@ onUnmounted(() => {
                         </table>
                     </div>
                 </div>
+            </main>
+
+            <!-- ========== POSITIONS TAB ========== -->
+            <main v-else-if="activeTab === 'positions'" class="flex-1 p-6 overflow-auto" :class="{ 'animate-fade-in': ready }">
+                <div class="max-w-3xl">
+                    <!-- Header -->
+                    <div class="flex items-center justify-between mb-6">
+                        <div>
+                            <h2 class="text-lg font-semibold text-surface-100">Manage Positions</h2>
+                            <p class="text-sm text-surface-400 mt-0.5">Create custom positions for your team members</p>
+                        </div>
+                        <button @click="showAddPosition = true; resetPositionForm()"
+                            class="btn-primary text-sm py-2 px-4 flex items-center gap-2">
+                            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                            </svg>
+                            Add Position
+                        </button>
+                    </div>
+
+                    <!-- Loading -->
+                    <div v-if="positionsLoading && positions.length === 0" class="flex items-center justify-center py-16">
+                        <div class="w-6 h-6 border-2 border-brand/30 border-t-brand rounded-full animate-spin"></div>
+                    </div>
+
+                    <!-- Empty state -->
+                    <div v-else-if="positions.length === 0" class="flex flex-col items-center justify-center py-16">
+                        <div class="w-16 h-16 mx-auto mb-4 rounded-2xl bg-surface-800/50 flex items-center justify-center">
+                            <svg class="w-8 h-8 text-surface-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M20.25 14.15v4.25c0 1.094-.787 2.036-1.872 2.18-2.087.277-4.216.42-6.378.42s-4.291-.143-6.378-.42c-1.085-.144-1.872-1.086-1.872-2.18v-4.25m16.5 0a2.18 2.18 0 00.75-1.661V8.706c0-1.081-.768-2.015-1.837-2.175a48.114 48.114 0 00-3.413-.387m4.5 8.006c-.194.165-.42.295-.673.38A23.978 23.978 0 0112 15.75c-2.648 0-5.195-.429-7.577-1.22a2.016 2.016 0 01-.673-.38m0 0A2.18 2.18 0 013 12.489V8.706c0-1.081.768-2.015 1.837-2.175a48.111 48.111 0 013.413-.387m7.5 0V5.25A2.25 2.25 0 0013.5 3h-3a2.25 2.25 0 00-2.25 2.25v.894m7.5 0a48.667 48.667 0 00-7.5 0M12 12.75h.008v.008H12v-.008z" />
+                            </svg>
+                        </div>
+                        <p class="text-surface-300 font-medium">No positions created yet</p>
+                        <p class="text-sm text-surface-500 mt-1">Create positions like Developer, Senior Developer, etc.</p>
+                        <button @click="showAddPosition = true; resetPositionForm()"
+                            class="mt-4 btn-primary text-sm py-2 px-4">Create Your First Position</button>
+                    </div>
+
+                    <!-- Positions list -->
+                    <div v-else class="space-y-1.5">
+                        <div v-for="(pos, idx) in positions" :key="pos.id"
+                            data-pos-item
+                            draggable="true"
+                            @dragstart="onPosDragStart($event, pos)"
+                            @dragend="onPosDragEnd"
+                            @dragover="onPosDragOver($event, pos)"
+                            @dragleave="onPosDragLeave($event, pos)"
+                            @drop="onPosDrop($event, pos)"
+                            class="card p-4 flex items-center gap-4 group hover:border-surface-600/50 transition-all cursor-grab active:cursor-grabbing"
+                            :class="{ 'border-brand/40 bg-brand/5': dragOverPosId === pos.id && dragPosId !== pos.id }">
+                            <!-- Drag handle + rank -->
+                            <div class="flex flex-col items-center gap-0.5 flex-shrink-0 w-6">
+                                <svg class="w-4 h-4 text-surface-600 group-hover:text-surface-400 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 9h16.5m-16.5 6.75h16.5" />
+                                </svg>
+                                <span class="text-[10px] font-mono text-surface-500">{{ idx + 1 }}</span>
+                            </div>
+                            <div class="flex-shrink-0 w-10 h-10 rounded-xl flex items-center justify-center text-sm font-bold"
+                                :class="getPositionBadge(pos.title)">
+                                {{ pos.title.charAt(0).toUpperCase() }}
+                            </div>
+                            <div class="flex-1 min-w-0">
+                                <div class="flex items-center gap-2">
+                                    <h3 class="text-sm font-semibold text-surface-100 truncate">{{ pos.title }}</h3>
+                                    <span v-if="!pos.is_active" class="text-[10px] font-medium px-1.5 py-0.5 rounded bg-red-500/10 text-red-400">Inactive</span>
+                                </div>
+                                <p v-if="pos.description" class="text-xs text-surface-400 mt-0.5 truncate">{{ pos.description }}</p>
+                                <p class="text-[10px] text-surface-500 mt-1">{{ pos.users_count }} member{{ pos.users_count !== 1 ? 's' : '' }} assigned</p>
+                            </div>
+                            <div class="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <button @click="togglePositionActive(pos)"
+                                    :title="pos.is_active ? 'Deactivate' : 'Activate'"
+                                    class="w-8 h-8 rounded-lg flex items-center justify-center text-surface-400 hover:text-surface-200 hover:bg-surface-800 transition-colors">
+                                    <svg v-if="pos.is_active" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M3.98 8.223A10.477 10.477 0 001.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.45 10.45 0 0112 4.5c4.756 0 8.773 3.162 10.065 7.498a10.523 10.523 0 01-4.293 5.774M6.228 6.228L3 3m3.228 3.228l3.65 3.65m7.894 7.894L21 21m-3.228-3.228l-3.65-3.65m0 0a3 3 0 10-4.243-4.243m4.242 4.242L9.88 9.88" />
+                                    </svg>
+                                    <svg v-else class="w-4 h-4 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                    </svg>
+                                </button>
+                                <button @click="openEditPosition(pos)"
+                                    class="w-8 h-8 rounded-lg flex items-center justify-center text-surface-400 hover:text-surface-200 hover:bg-surface-800 transition-colors">
+                                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10" />
+                                    </svg>
+                                </button>
+                                <button @click="deleteConfirm = pos"
+                                    class="w-8 h-8 rounded-lg flex items-center justify-center text-surface-400 hover:text-red-400 hover:bg-red-500/10 transition-colors">
+                                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Add Position Modal -->
+                <Teleport to="body">
+                    <div v-if="showAddPosition" class="fixed inset-0 z-[100] flex items-center justify-center p-4"
+                        @click.self="showAddPosition = false; resetPositionForm()">
+                        <div class="fixed inset-0 bg-black/60 backdrop-blur-sm"></div>
+                        <div class="relative bg-surface-900 border border-surface-700/50 rounded-2xl shadow-2xl w-full max-w-md animate-slide-up">
+                            <div class="flex items-center justify-between px-6 py-4 border-b border-surface-800/50">
+                                <h3 class="text-lg font-semibold text-surface-100">Add Position</h3>
+                                <button @click="showAddPosition = false; resetPositionForm()"
+                                    class="w-8 h-8 rounded-lg bg-surface-800/50 flex items-center justify-center text-surface-400 hover:text-surface-200 hover:bg-surface-800 transition-colors">
+                                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                                    </svg>
+                                </button>
+                            </div>
+                            <form @submit.prevent="addPosition" class="px-6 py-5 space-y-4">
+                                <div>
+                                    <label class="block text-xs font-medium text-surface-400 mb-1.5">Title *</label>
+                                    <input v-model="addPositionForm.title" type="text" placeholder="e.g. Senior Developer"
+                                        class="input-field w-full" :class="{ 'border-red-500/50': addPositionErrors.title }" />
+                                    <p v-if="addPositionErrors.title" class="text-[11px] text-red-400 mt-1">{{ addPositionErrors.title }}</p>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-surface-400 mb-1.5">Description</label>
+                                    <textarea v-model="addPositionForm.description" rows="3"
+                                        placeholder="Brief description of this position (optional)"
+                                        class="input-field w-full resize-y text-sm"></textarea>
+                                </div>
+                                <div class="flex items-center justify-end gap-3 pt-3 border-t border-surface-800/50">
+                                    <button type="button" @click="showAddPosition = false; resetPositionForm()"
+                                        class="btn-ghost text-sm px-4 py-2">Cancel</button>
+                                    <button type="submit" :disabled="addPositionLoading"
+                                        class="btn-primary text-sm px-5 py-2.5 justify-center min-w-[120px]">
+                                        <span v-if="addPositionLoading" class="flex items-center gap-2">
+                                            <div class="w-3.5 h-3.5 border-2 border-surface-950/30 border-t-surface-950 rounded-full animate-spin"></div>
+                                            Adding...
+                                        </span>
+                                        <span v-else>Add Position</span>
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </Teleport>
+
+                <!-- Edit Position Modal -->
+                <Teleport to="body">
+                    <div v-if="editPosition" class="fixed inset-0 z-[100] flex items-center justify-center p-4"
+                        @click.self="editPosition = null">
+                        <div class="fixed inset-0 bg-black/60 backdrop-blur-sm"></div>
+                        <div class="relative bg-surface-900 border border-surface-700/50 rounded-2xl shadow-2xl w-full max-w-md animate-slide-up">
+                            <div class="flex items-center justify-between px-6 py-4 border-b border-surface-800/50">
+                                <h3 class="text-lg font-semibold text-surface-100">Edit Position</h3>
+                                <button @click="editPosition = null"
+                                    class="w-8 h-8 rounded-lg bg-surface-800/50 flex items-center justify-center text-surface-400 hover:text-surface-200 hover:bg-surface-800 transition-colors">
+                                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                                    </svg>
+                                </button>
+                            </div>
+                            <form @submit.prevent="saveEditPosition" class="px-6 py-5 space-y-4">
+                                <div>
+                                    <label class="block text-xs font-medium text-surface-400 mb-1.5">Title *</label>
+                                    <input v-model="editPositionForm.title" type="text"
+                                        class="input-field w-full" :class="{ 'border-red-500/50': editPositionErrors.title }" />
+                                    <p v-if="editPositionErrors.title" class="text-[11px] text-red-400 mt-1">{{ editPositionErrors.title }}</p>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-surface-400 mb-1.5">Description</label>
+                                    <textarea v-model="editPositionForm.description" rows="3"
+                                        class="input-field w-full resize-y text-sm"></textarea>
+                                </div>
+                                <div class="rounded-lg bg-surface-800/40 border border-surface-700/20 p-3 text-xs">
+                                    <span class="text-surface-500">Members assigned</span>
+                                    <p class="text-surface-200 font-mono mt-0.5">{{ editPosition.users_count }}</p>
+                                </div>
+                                <div class="flex items-center justify-end gap-3 pt-3 border-t border-surface-800/50">
+                                    <button type="button" @click="editPosition = null" class="btn-ghost text-sm px-4 py-2">Cancel</button>
+                                    <button type="submit" :disabled="editPositionLoading"
+                                        class="btn-primary text-sm px-5 py-2.5 justify-center min-w-[100px]">
+                                        <span v-if="editPositionLoading" class="flex items-center gap-2">
+                                            <div class="w-3.5 h-3.5 border-2 border-surface-950/30 border-t-surface-950 rounded-full animate-spin"></div>
+                                            Saving...
+                                        </span>
+                                        <span v-else>Save</span>
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </Teleport>
+
+                <!-- Delete Confirm Modal -->
+                <Teleport to="body">
+                    <div v-if="deleteConfirm" class="fixed inset-0 z-[100] flex items-center justify-center p-4"
+                        @click.self="deleteConfirm = null">
+                        <div class="fixed inset-0 bg-black/60 backdrop-blur-sm"></div>
+                        <div class="relative bg-surface-900 border border-surface-700/50 rounded-2xl shadow-2xl w-full max-w-sm animate-slide-up p-6">
+                            <div class="flex flex-col items-center text-center">
+                                <div class="w-12 h-12 rounded-full bg-red-500/10 flex items-center justify-center mb-4">
+                                    <svg class="w-6 h-6 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+                                    </svg>
+                                </div>
+                                <h3 class="text-base font-semibold text-surface-100">Delete Position</h3>
+                                <p class="text-sm text-surface-400 mt-2">Are you sure you want to delete <span class="font-medium text-surface-200">"{{ deleteConfirm.title }}"</span>?</p>
+                                <p v-if="deleteConfirm.users_count > 0" class="text-xs text-amber-400 mt-2">This position has {{ deleteConfirm.users_count }} member(s) assigned. Reassign them first.</p>
+                            </div>
+                            <div class="flex items-center justify-center gap-3 mt-6">
+                                <button @click="deleteConfirm = null" class="btn-ghost text-sm px-4 py-2">Cancel</button>
+                                <button @click="deletePosition(deleteConfirm)" :disabled="deleteLoading || deleteConfirm.users_count > 0"
+                                    class="text-sm px-5 py-2.5 rounded-lg font-medium transition-colors"
+                                    :class="deleteConfirm.users_count > 0 ? 'bg-surface-700 text-surface-500 cursor-not-allowed' : 'bg-red-500/10 text-red-400 hover:bg-red-500/20'">
+                                    <span v-if="deleteLoading" class="flex items-center gap-2">
+                                        <div class="w-3.5 h-3.5 border-2 border-red-400/30 border-t-red-400 rounded-full animate-spin"></div>
+                                        Deleting...
+                                    </span>
+                                    <span v-else>Delete</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </Teleport>
             </main>
 
             <!-- ========== REPORTS TAB ========== -->

@@ -17,5 +17,6 @@ class DatabaseSeeder extends Seeder
     {
         $this->call(RolesAndUsersSeeder::class);
         $this->call(EmailTemplateSeeder::class);
+        $this->call(PositionSeeder::class);
     }
 }

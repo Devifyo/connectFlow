@@ -91,7 +91,7 @@ function initials(name) {
                     </div>
                     <div class="min-w-0">
                         <div class="text-xs font-medium text-surface-100 truncate">{{ user.name }}</div>
-                        <div v-if="user.designation" class="text-[10px] text-surface-500 truncate">{{ user.designation }}</div>
+                        <div class="text-[10px] text-surface-500 truncate">{{ user.positions?.length ? user.positions.map(p => p.title).join(', ') : (user.designation || '') }}</div>
                     </div>
                 </button>
             </div>

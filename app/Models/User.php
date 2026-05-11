@@ -71,6 +71,11 @@ class User extends Authenticatable
         return \App\Support\IdHash::signedUrl($this->id);
     }
 
+    public function positions()
+    {
+        return $this->belongsToMany(Position::class, 'position_user')->withTimestamps()->orderBy('sort_order');
+    }
+
     public function bids()
     {
         return $this->hasMany(Bid::class);

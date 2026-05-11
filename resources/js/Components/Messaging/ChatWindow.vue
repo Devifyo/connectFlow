@@ -402,7 +402,10 @@ function hasMedia(msg) {
                     class="absolute bottom-0 right-0 w-3 h-3 rounded-full bg-surface-500 ring-2 ring-surface-900"></span>
             </div>
             <div class="min-w-0 flex-1">
-                <div class="text-sm font-semibold text-surface-100 truncate">{{ activeConversation.user?.name || 'Unknown' }}</div>
+                <div class="flex items-center gap-2">
+                    <span class="text-sm font-semibold text-surface-100 truncate">{{ activeConversation.user?.name || 'Unknown' }}</span>
+                    <span v-if="activeConversation.user?.positions?.length" class="text-[10px] text-surface-400 truncate hidden sm:inline">{{ activeConversation.user.positions.map(p => p.title).join(', ') }}</span>
+                </div>
                 <div v-if="!activeConversation.isDraft" class="text-xs mt-0.5">
                     <template v-if="typingState">
                         <span class="text-brand font-medium">typing<span class="typing-dots">...</span></span>

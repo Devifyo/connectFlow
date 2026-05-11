@@ -17,6 +17,7 @@ class TenantAdminController extends Controller
         $now = Carbon::now('UTC');
 
         $bidders = User::role('Bidder')
+            ->with(['positions' => fn ($q) => $q->select('id', 'title', 'sort_order')->orderBy('sort_order')])
             ->withCount('bids')
             ->get()
             ->map(function ($bidder) use ($now) {
@@ -49,6 +50,7 @@ class TenantAdminController extends Controller
                     'email' => $bidder->email,
                     'employee_id' => $bidder->employee_id,
                     'designation' => $bidder->designation,
+                    'positions' => $bidder->positions->map(fn ($p) => ['id' => $p->id, 'title' => $p->title]),
                     'is_active' => $bidder->is_active,
                     'joining_date' => $bidder->joining_date,
                     'salary' => $bidder->salary ? (float) $bidder->salary : null,
@@ -72,13 +74,18 @@ class TenantAdminController extends Controller
             'name' => 'required|string|max:255',
             'email' => 'required|email|unique:users,email',
             'password' => 'required|string|min:6',
-            'designation' => 'required|in:Intern BDE,BDE Bidder,Senior BDE',
+            'position_ids' => 'required|array|min:1',
+            'position_ids.*' => 'exists:positions,id',
             'joining_date' => 'required|date',
             'salary' => 'required|numeric|min:0',
             'min_hours_per_day' => 'required|numeric|min:1|max:24',
         ]);
 
         $tenantId = auth()->user()->tenant_id;
+
+        $positions = \App\Models\Position::whereIn('id', $request->position_ids)->get();
+        $designationText = $positions->pluck('title')->join(', ');
+
         $lastEmp = User::withoutGlobalScopes()
             ->where('tenant_id', $tenantId)
             ->whereNotNull('employee_id')
@@ -97,12 +104,13 @@ class TenantAdminController extends Controller
             'password' => Hash::make($request->password),
             'tenant_id' => $tenantId,
             'is_active' => true,
-            'designation' => $request->designation,
+            'designation' => $designationText,
             'employee_id' => $employeeId,
             'joining_date' => $request->joining_date,
             'salary' => $request->salary,
             'min_hours_per_day' => $request->min_hours_per_day,
         ]);
+        $user->positions()->attach($request->position_ids);
         $user->assignRole('Bidder');
 
         return response()->json([
@@ -113,6 +121,7 @@ class TenantAdminController extends Controller
                 'email' => $user->email,
                 'employee_id' => $user->employee_id,
                 'designation' => $user->designation,
+                'positions' => $positions->map(fn ($p) => ['id' => $p->id, 'title' => $p->title]),
             ],
         ]);
     }
@@ -120,7 +129,8 @@ class TenantAdminController extends Controller
     public function updateMember(Request $request, $id)
     {
         $request->validate([
-            'designation' => 'sometimes|in:Intern BDE,BDE Bidder,Senior BDE',
+            'position_ids' => 'sometimes|array',
+            'position_ids.*' => 'exists:positions,id',
             'is_active' => 'sometimes|boolean',
             'salary' => 'sometimes|numeric|min:0',
             'min_hours_per_day' => 'sometimes|numeric|min:1|max:24',
@@ -129,7 +139,13 @@ class TenantAdminController extends Controller
 
         $user = User::findOrFail($id);
 
-        $fields = ['designation', 'is_active', 'salary', 'min_hours_per_day', 'notification_email'];
+        if ($request->has('position_ids')) {
+            $user->positions()->sync($request->position_ids);
+            $positions = \App\Models\Position::whereIn('id', $request->position_ids)->pluck('title');
+            $user->designation = $positions->join(', ');
+        }
+
+        $fields = ['is_active', 'salary', 'min_hours_per_day', 'notification_email'];
         foreach ($fields as $field) {
             if ($request->has($field)) {
                 $user->$field = $request->$field;
@@ -243,7 +259,7 @@ class TenantAdminController extends Controller
 
     public function memberProfile($id)
     {
-        $user = User::findOrFail($id);
+        $user = User::with('positions:id,title')->findOrFail($id);
 
         return response()->json([
             'member' => [
@@ -253,6 +269,7 @@ class TenantAdminController extends Controller
                 'notification_email' => $user->notification_email,
                 'employee_id' => $user->employee_id,
                 'designation' => $user->designation,
+                'positions' => $user->positions->map(fn ($p) => ['id' => $p->id, 'title' => $p->title]),
                 'joining_date' => $user->joining_date,
                 'salary' => $user->salary ? (float) $user->salary : null,
                 'min_hours_per_day' => (float) $user->min_hours_per_day,

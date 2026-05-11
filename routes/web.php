@@ -60,6 +60,13 @@ Route::middleware('auth')->group(function () {
         Route::post('/api/admin/agency-profile', [\App\Http\Controllers\TenantAdminController::class, 'updateAgencyProfile']);
         Route::put('/api/admin/bids/{id}/status', [\App\Http\Controllers\TenantAdminController::class, 'updateBidStatus']);
         Route::put('/api/admin/notification-email', [\App\Http\Controllers\TenantAdminController::class, 'updateNotificationEmail']);
+
+        // Positions
+        Route::get('/api/admin/positions', [\App\Http\Controllers\PositionController::class, 'index']);
+        Route::post('/api/admin/positions', [\App\Http\Controllers\PositionController::class, 'store']);
+        Route::put('/api/admin/positions/{id}', [\App\Http\Controllers\PositionController::class, 'update']);
+        Route::delete('/api/admin/positions/{id}', [\App\Http\Controllers\PositionController::class, 'destroy']);
+        Route::post('/api/admin/positions/reorder', [\App\Http\Controllers\PositionController::class, 'reorder']);
     });
 
     // Stop impersonation (accessible while impersonating)
