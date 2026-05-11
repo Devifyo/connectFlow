@@ -37,6 +37,7 @@ Route::middleware('auth')->group(function () {
     Route::post('/api/bids/check', [\App\Http\Controllers\BidController::class, 'checkCollision']);
     Route::post('/api/bids/submit', [\App\Http\Controllers\BidController::class, 'submit']);
     Route::post('/api/bids/analyze-job', [\App\Http\Controllers\BidController::class, 'analyzeJob']);
+    Route::put('/api/bids/{id}', [\App\Http\Controllers\BidController::class, 'update']);
     Route::get('/api/agency-profile', [\App\Http\Controllers\TenantAdminController::class, 'getAgencyProfile']);
     Route::get('/api/bids/mine', [\App\Http\Controllers\BidController::class, 'myBids']);
     Route::post('/api/time/punch-in', [\App\Http\Controllers\TimeLogController::class, 'punchIn']);

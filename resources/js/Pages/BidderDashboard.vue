@@ -281,6 +281,41 @@ async function submitBid() {
     }
 }
 
+// --- Edit Bid ---
+const editingBidId = ref(null);
+const editBidForm = ref({ job_title: '', connects_used: 1 });
+const isSavingBid = ref(false);
+
+function startEditBid(bid) {
+    editingBidId.value = bid.bid_id;
+    editBidForm.value = { job_title: bid.job_title || '', connects_used: bid.connects_used };
+}
+
+function cancelEditBid() {
+    editingBidId.value = null;
+}
+
+async function saveEditBid() {
+    isSavingBid.value = true;
+    try {
+        await axios.put(`/api/bids/${editingBidId.value}`, {
+            job_title: editBidForm.value.job_title || null,
+            connects_used: Number(editBidForm.value.connects_used),
+        });
+        const bid = bids.value.find(b => b.bid_id === editingBidId.value);
+        if (bid) {
+            bid.job_title = editBidForm.value.job_title;
+            bid.connects_used = Number(editBidForm.value.connects_used);
+        }
+        editingBidId.value = null;
+        fetchBids(bidsPagination.value.current_page);
+    } catch (e) {
+        console.error(e);
+    } finally {
+        isSavingBid.value = false;
+    }
+}
+
 // --- Proposals List ---
 const bids = ref([]);
 const bidStats = ref({ total: 0, today: 0, this_week: 0, connects_today: 0 });
@@ -1119,12 +1154,16 @@ onUnmounted(() => {
                                     <th class="px-5 py-3 text-left table-header">Connects</th>
                                     <th class="px-5 py-3 text-left table-header">Status</th>
                                     <th class="px-5 py-3 text-left table-header">Date</th>
+                                    <th class="px-5 py-3 text-right table-header w-10"></th>
                                 </tr>
                             </thead>
                             <tbody class="text-sm">
                                 <tr v-for="bid in bids" :key="bid.bid_id" class="border-b border-surface-800/30 hover:bg-surface-800/20 transition-colors">
                                     <td class="px-5 py-3.5">
-                                        <div class="max-w-xs">
+                                        <div v-if="editingBidId === bid.bid_id" class="max-w-xs">
+                                            <input v-model="editBidForm.job_title" type="text" placeholder="Job title" class="input-field text-sm w-full" @keydown.enter="saveEditBid" @keydown.esc="cancelEditBid" />
+                                        </div>
+                                        <div v-else class="max-w-xs">
                                             <p class="font-medium text-surface-200 truncate">{{ bid.job_title || 'Untitled Job' }}</p>
                                             <a :href="bid.job_url" target="_blank" class="text-xs text-surface-500 hover:text-brand truncate block mt-0.5 transition-colors">
                                                 {{ bid.job_url.substring(0, 50) }}...
@@ -1134,7 +1173,10 @@ onUnmounted(() => {
                                     <td class="px-5 py-3.5">
                                         <span class="badge-neutral">{{ bid.platform_name }}</span>
                                     </td>
-                                    <td class="px-5 py-3.5 font-mono text-surface-300">{{ bid.connects_used }}</td>
+                                    <td class="px-5 py-3.5">
+                                        <input v-if="editingBidId === bid.bid_id" v-model="editBidForm.connects_used" type="number" min="1" class="input-field text-sm font-mono w-20" @keydown.enter="saveEditBid" @keydown.esc="cancelEditBid" />
+                                        <span v-else class="font-mono text-surface-300">{{ bid.connects_used }}</span>
+                                    </td>
                                     <td class="px-5 py-3.5">
                                         <span :class="{
                                             'badge-success': bid.status === 'Hired',
@@ -1146,6 +1188,15 @@ onUnmounted(() => {
                                     <td class="px-5 py-3.5 text-surface-400 text-xs whitespace-nowrap">
                                         <div>{{ formatDate(bid.created_at) }}</div>
                                         <div class="text-surface-600">{{ formatTime(bid.created_at) }}</div>
+                                    </td>
+                                    <td class="px-5 py-3.5 text-right">
+                                        <div v-if="editingBidId === bid.bid_id" class="flex items-center justify-end gap-1.5">
+                                            <button @click="saveEditBid" :disabled="isSavingBid" class="text-xs text-brand hover:text-brand/80 font-medium">{{ isSavingBid ? '...' : 'Save' }}</button>
+                                            <button @click="cancelEditBid" class="text-xs text-surface-500 hover:text-surface-300">Cancel</button>
+                                        </div>
+                                        <button v-else @click="startEditBid(bid)" class="text-surface-600 hover:text-surface-300 transition-colors" title="Edit">
+                                            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Z" /></svg>
+                                        </button>
                                     </td>
                                 </tr>
                             </tbody>

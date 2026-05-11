@@ -115,6 +115,23 @@ class BidController extends Controller
         ]);
     }
 
+    public function update(Request $request, $id)
+    {
+        $request->validate([
+            'job_title' => 'nullable|string|max:255',
+            'connects_used' => 'required|integer|min:1',
+        ]);
+
+        $bid = Bid::where('bid_id', $id)->where('user_id', auth()->id())->firstOrFail();
+
+        $bid->update([
+            'job_title' => $request->job_title,
+            'connects_used' => $request->connects_used,
+        ]);
+
+        return response()->json(['status' => 'success', 'bid' => $bid]);
+    }
+
     public function analyzeJob(Request $request)
     {
         $request->validate([
