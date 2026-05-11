@@ -11,7 +11,7 @@ import '@vuepic/vue-datepicker/dist/main.css';
 
 const props = defineProps(['auth']);
 
-const { totalUnread, fetchUnreadCount, handleIncomingMessage, handleTypingEvent, handleReadEvent, handlePresenceEvent, togglePanel, startHeartbeat } = useMessaging();
+const { totalUnread, fetchUnreadCount, handleIncomingMessage, handleTypingEvent, handleReadEvent, handlePresenceEvent, togglePanel, startHeartbeat, openConversationByHash } = useMessaging();
 useTabBadge(totalUnread, 'Admin Dashboard - PitchFlow');
 
 const ready = ref(false);
@@ -498,6 +498,12 @@ onMounted(async () => {
             .listen('.user.typing', handleTypingEvent)
             .listen('.messages.read', handleReadEvent)
             .listen('.user.presence', handlePresenceEvent);
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    const convHash = params.get('conversation');
+    if (convHash) {
+        openConversationByHash(convHash);
     }
 });
 

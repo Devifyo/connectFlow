@@ -337,6 +337,26 @@ export function useMessaging() {
     function closePanel() { isPanelOpen.value = false; activeConversation.value = null; typingState.value = null; }
     function togglePanel() { isPanelOpen.value = !isPanelOpen.value; }
 
+    async function openConversationById(conversationId) {
+        await fetchConversations();
+        const conv = conversations.value.find(c => c.id === conversationId);
+        if (conv) {
+            isPanelOpen.value = true;
+            setActiveConversation(conv);
+        } else {
+            isPanelOpen.value = true;
+        }
+    }
+
+    async function openConversationByHash(hash) {
+        try {
+            const { data } = await axios.get(`/api/messages/resolve/${hash}`);
+            if (data.conversation_id) {
+                await openConversationById(data.conversation_id);
+            }
+        } catch {}
+    }
+
     function setActiveConversation(conv) {
         activeConversation.value = conv;
         nextCursor.value = null;
@@ -357,6 +377,6 @@ export function useMessaging() {
         searchUsers, markRead, fetchUnreadCount, handleIncomingMessage,
         handleTypingEvent, handleReadEvent, handlePresenceEvent, emitTyping,
         startHeartbeat, stopHeartbeat,
-        openPanel, closePanel, togglePanel, setActiveConversation, onIncoming,
+        openPanel, closePanel, togglePanel, setActiveConversation, openConversationById, openConversationByHash, onIncoming,
     };
 }

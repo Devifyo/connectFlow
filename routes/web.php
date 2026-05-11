@@ -81,6 +81,11 @@ Route::middleware('auth')->group(function () {
     Route::post('/api/messages/conversations/{conversation}/read', [\App\Http\Controllers\MessageController::class, 'markRead']);
     Route::post('/api/messages/conversations/{conversation}/typing', [\App\Http\Controllers\MessageController::class, 'typing']);
     Route::get('/api/messages/attachments/{attachment}', [\App\Http\Controllers\MessageController::class, 'showAttachment']);
+    Route::get('/api/messages/resolve/{hash}', function (string $hash) {
+        $id = \App\Support\IdHash::decode($hash);
+        if (!$id) return response()->json(['error' => 'Invalid link'], 404);
+        return response()->json(['conversation_id' => $id]);
+    })->where('hash', '[0-9a-zA-Z]{6}');
 
     // Profile API
     Route::get('/api/profile', [ProfileController::class, 'apiGet']);

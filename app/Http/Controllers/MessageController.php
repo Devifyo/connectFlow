@@ -188,7 +188,7 @@ class MessageController extends Controller
                     $user->id,
                     $request->body ?? '📎 Attachment',
                     $conversation->id,
-                )->delay(now()->addMinutes(2));
+                );
             }
         }
 
@@ -380,7 +380,7 @@ class MessageController extends Controller
         if (!$user->last_active_at) {
             return 'offline';
         }
-        $seconds = now()->diffInSeconds($user->last_active_at);
+        $seconds = abs(now()->diffInSeconds($user->last_active_at));
         if ($user->presence_status === 'online' && $seconds > 45) {
             return 'offline';
         }

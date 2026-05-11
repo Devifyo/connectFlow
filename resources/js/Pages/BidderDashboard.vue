@@ -14,7 +14,7 @@ import { vProtectedSrc } from '@/directives/protectedSrc';
 
 const props = defineProps(['auth', 'impersonating']);
 
-const { totalUnread, fetchUnreadCount, handleIncomingMessage, handleTypingEvent, handleReadEvent, handlePresenceEvent, togglePanel, startHeartbeat } = useMessaging();
+const { totalUnread, fetchUnreadCount, handleIncomingMessage, handleTypingEvent, handleReadEvent, handlePresenceEvent, togglePanel, startHeartbeat, openConversationByHash } = useMessaging();
 useTabBadge(totalUnread, 'Dashboard - PitchFlow');
 
 async function stopImpersonating() {
@@ -635,6 +635,12 @@ onMounted(() => {
             .listen('.user.typing', handleTypingEvent)
             .listen('.messages.read', handleReadEvent)
             .listen('.user.presence', handlePresenceEvent);
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    const convHash = params.get('conversation');
+    if (convHash) {
+        openConversationByHash(convHash);
     }
 });
 

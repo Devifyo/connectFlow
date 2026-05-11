@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Models\EmailTemplate;
 use App\Models\User;
+use App\Support\IdHash;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -42,7 +43,9 @@ class SendOfflineMessageEmail implements ShouldQueue
             'app_name' => config('app.name', 'PitchFlow'),
             'recipient_name' => $recipient->name,
             'sender_name' => $sender->name,
+            'sender_initial' => strtoupper(substr($sender->name, 0, 1)),
             'message_preview' => \Illuminate\Support\Str::limit($this->messageBody, 200),
+            'conversation_id' => IdHash::encode($this->conversationId),
             'app_url' => 'https://pitchflow.devifyo.cloud',
             'year' => date('Y'),
         ]);
@@ -61,7 +64,7 @@ class SendOfflineMessageEmail implements ShouldQueue
         if (!$user->last_active_at) {
             return 'offline';
         }
-        $seconds = now()->diffInSeconds($user->last_active_at);
+        $seconds = abs(now()->diffInSeconds($user->last_active_at));
         if ($user->presence_status === 'online' && $seconds > 45) {
             return 'offline';
         }
