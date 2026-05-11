@@ -29,7 +29,7 @@ services:
     entrypoint: >
       sh -c "chmod -R 775 /var/www/html/storage /var/www/html/bootstrap/cache 2>/dev/null; true &&
              npm install && npm run build &&
-             php-fpm"
+             supervisord -c /etc/supervisord.conf"
     networks:
       - connectflow_default
     depends_on:

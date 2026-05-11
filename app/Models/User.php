@@ -12,7 +12,7 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Spatie\Permission\Traits\HasRoles;
 
-#[Fillable(['name', 'email', 'password', 'tenant_id', 'is_active', 'designation', 'employee_id', 'joining_date', 'salary', 'min_hours_per_day', 'address', 'profile_picture', 'higher_education', 'date_of_birth', 'phone_country_code', 'phone_number'])]
+#[Fillable(['name', 'email', 'password', 'tenant_id', 'is_active', 'designation', 'employee_id', 'joining_date', 'salary', 'min_hours_per_day', 'address', 'profile_picture', 'higher_education', 'date_of_birth', 'phone_country_code', 'phone_number', 'notification_email'])]
 #[Hidden(['password', 'remember_token'])]
 class User extends Authenticatable
 {
@@ -86,6 +86,11 @@ class User extends Authenticatable
         return $this->belongsToMany(Conversation::class, 'conversation_participants')
             ->withPivot('last_read_at')
             ->withTimestamps();
+    }
+
+    public function getNotificationEmailAddress(): string
+    {
+        return $this->notification_email ?: $this->email;
     }
 
     public function sendPasswordResetNotification($token): void

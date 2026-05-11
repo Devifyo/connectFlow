@@ -124,11 +124,12 @@ class TenantAdminController extends Controller
             'is_active' => 'sometimes|boolean',
             'salary' => 'sometimes|numeric|min:0',
             'min_hours_per_day' => 'sometimes|numeric|min:1|max:24',
+            'notification_email' => 'sometimes|nullable|email',
         ]);
 
         $user = User::findOrFail($id);
 
-        $fields = ['designation', 'is_active', 'salary', 'min_hours_per_day'];
+        $fields = ['designation', 'is_active', 'salary', 'min_hours_per_day', 'notification_email'];
         foreach ($fields as $field) {
             if ($request->has($field)) {
                 $user->$field = $request->$field;
@@ -137,6 +138,19 @@ class TenantAdminController extends Controller
         $user->save();
 
         return response()->json(['status' => 'success']);
+    }
+
+    public function updateNotificationEmail(Request $request)
+    {
+        $request->validate([
+            'notification_email' => 'nullable|email',
+        ]);
+
+        $user = auth()->user();
+        $user->notification_email = $request->notification_email;
+        $user->save();
+
+        return response()->json(['status' => 'success', 'notification_email' => $user->notification_email]);
     }
 
     public function impersonate(Request $request, $id)
@@ -236,6 +250,7 @@ class TenantAdminController extends Controller
                 'id' => $user->id,
                 'name' => $user->name,
                 'email' => $user->email,
+                'notification_email' => $user->notification_email,
                 'employee_id' => $user->employee_id,
                 'designation' => $user->designation,
                 'joining_date' => $user->joining_date,

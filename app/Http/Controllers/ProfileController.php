@@ -130,6 +130,29 @@ class ProfileController extends Controller
         ]);
     }
 
+    public function updateBasic(Request $request)
+    {
+        $user = $request->user();
+
+        $request->validate([
+            'name' => 'required|string|max:255',
+            'email' => 'required|email|unique:users,email,' . $user->id,
+            'notification_email' => 'nullable|email',
+        ]);
+
+        $user->name = $request->name;
+
+        if ($user->email !== $request->email) {
+            $user->email = $request->email;
+            $user->email_verified_at = null;
+        }
+
+        $user->notification_email = $request->notification_email;
+        $user->save();
+
+        return response()->json(['ok' => true]);
+    }
+
     public function updatePassword(Request $request)
     {
         $request->validate([

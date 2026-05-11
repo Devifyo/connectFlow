@@ -59,6 +59,7 @@ Route::middleware('auth')->group(function () {
         Route::get('/api/admin/agency-profile', [\App\Http\Controllers\TenantAdminController::class, 'getAgencyProfile']);
         Route::post('/api/admin/agency-profile', [\App\Http\Controllers\TenantAdminController::class, 'updateAgencyProfile']);
         Route::put('/api/admin/bids/{id}/status', [\App\Http\Controllers\TenantAdminController::class, 'updateBidStatus']);
+        Route::put('/api/admin/notification-email', [\App\Http\Controllers\TenantAdminController::class, 'updateNotificationEmail']);
     });
 
     // Stop impersonation (accessible while impersonating)
@@ -86,6 +87,7 @@ Route::middleware('auth')->group(function () {
     Route::post('/api/profile', [ProfileController::class, 'apiUpdate']);
     Route::get('/api/profile/picture/{token}', [ProfileController::class, 'showPicture'])->where('token', '[0-9a-zA-Z]{6}');
     Route::post('/api/profile/password', [ProfileController::class, 'updatePassword']);
+    Route::put('/api/profile/basic', [ProfileController::class, 'updateBasic']);
 
     // Presence heartbeat
     Route::post('/api/heartbeat', [\App\Http\Controllers\MessageController::class, 'heartbeat']);

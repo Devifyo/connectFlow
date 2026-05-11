@@ -6,6 +6,7 @@ use App\Events\MessagesRead;
 use App\Events\NewMessage;
 use App\Events\UserPresenceChanged;
 use App\Events\UserTyping;
+use App\Jobs\SendOfflineMessageEmail;
 use App\Models\Conversation;
 use App\Models\MessageAttachment;
 use App\Models\User;
@@ -173,6 +174,22 @@ class MessageController extends Controller
             broadcast(new NewMessage($message));
         } catch (\Throwable $e) {
             \Log::warning('Broadcast failed: ' . $e->getMessage());
+        }
+
+        $recipientIds = $conversation->participants()
+            ->where('user_id', '!=', $user->id)
+            ->pluck('user_id');
+
+        foreach ($recipientIds as $recipientId) {
+            $recipient = User::withoutGlobalScopes()->find($recipientId);
+            if ($recipient && $this->resolvePresence($recipient) === 'offline') {
+                SendOfflineMessageEmail::dispatch(
+                    $recipientId,
+                    $user->id,
+                    $request->body ?? '📎 Attachment',
+                    $conversation->id,
+                )->delay(now()->addMinutes(2));
+            }
         }
 
         return response()->json($message);

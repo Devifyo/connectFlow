@@ -14,7 +14,8 @@ RUN apk add --no-cache \
     unzip \
     shadow \
     nodejs \
-    npm
+    npm \
+    supervisor
 
 # 2. PHP Extensions
 RUN docker-php-ext-configure gd --with-jpeg --with-webp && \
@@ -59,5 +60,8 @@ RUN mkdir -p \
 RUN chmod -R 777 storage bootstrap/cache /tmp && \
     chown -R www-data:www-data /tmp
 
-# 9. Run as root (permissions managed via volume mounts)
+# 9. Supervisor config
+COPY ./supervisor/supervisord.conf /etc/supervisord.conf
+
+# 10. Run as root (permissions managed via volume mounts)
 
