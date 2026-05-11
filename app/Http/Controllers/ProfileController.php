@@ -138,6 +138,7 @@ class ProfileController extends Controller
             'name' => 'required|string|max:255',
             'email' => 'required|email|unique:users,email,' . $user->id,
             'notification_email' => 'nullable|email',
+            'profile_picture' => 'nullable|image|max:5120',
         ]);
 
         $user->name = $request->name;
@@ -148,9 +149,21 @@ class ProfileController extends Controller
         }
 
         $user->notification_email = $request->notification_email;
+
+        if ($request->hasFile('profile_picture')) {
+            if ($user->profile_picture) {
+                Storage::disk('local')->delete($user->profile_picture);
+            }
+            $path = $request->file('profile_picture')->store('profile-pictures/' . $user->id, 'local');
+            $user->profile_picture = $path;
+        }
+
         $user->save();
 
-        return response()->json(['ok' => true]);
+        return response()->json([
+            'ok' => true,
+            'profile_picture_url' => $user->profile_picture_url,
+        ]);
     }
 
     public function updatePassword(Request $request)

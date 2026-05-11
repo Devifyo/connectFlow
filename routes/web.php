@@ -92,7 +92,7 @@ Route::middleware('auth')->group(function () {
     Route::post('/api/profile', [ProfileController::class, 'apiUpdate']);
     Route::get('/api/profile/picture/{token}', [ProfileController::class, 'showPicture'])->where('token', '[0-9a-zA-Z]{6}');
     Route::post('/api/profile/password', [ProfileController::class, 'updatePassword']);
-    Route::put('/api/profile/basic', [ProfileController::class, 'updateBasic']);
+    Route::post('/api/profile/basic', [ProfileController::class, 'updateBasic']);
 
     // Presence heartbeat
     Route::post('/api/heartbeat', [\App\Http\Controllers\MessageController::class, 'heartbeat']);

@@ -5,6 +5,7 @@ import PitchFlowLogo from '@/Components/PitchFlowLogo.vue';
 import MessagingPanel from '@/Components/Messaging/MessagingPanel.vue';
 import { useMessaging } from '@/composables/useMessaging';
 import { useTabBadge } from '@/composables/useTabBadge';
+import { vProtectedSrc } from '@/directives/protectedSrc';
 import axios from 'axios';
 import { VueDatePicker } from '@vuepic/vue-datepicker';
 import '@vuepic/vue-datepicker/dist/main.css';
@@ -433,11 +434,38 @@ const settingsErrors = ref({});
 const passwordSaving = ref(false);
 const passwordSaved = ref(false);
 const passwordErrors = ref({});
+const profilePicFile = ref(null);
+const profilePicPreview = ref(null);
+
+function handleProfilePic(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    profilePicFile.value = file;
+    const reader = new FileReader();
+    reader.onload = (ev) => profilePicPreview.value = ev.target.result;
+    reader.readAsDataURL(file);
+}
+
+async function loadProfilePicPreview() {
+    const url = props.auth.user.profile_picture_url;
+    if (!url) return;
+    try {
+        const res = await fetch(url, {
+            headers: { 'X-PF-Token': '1' },
+            credentials: 'same-origin',
+        });
+        if (res.ok) {
+            const blob = await res.blob();
+            profilePicPreview.value = URL.createObjectURL(blob);
+        }
+    } catch {}
+}
 
 function loadSettingsForm() {
     settingsForm.value.name = props.auth.user.name;
     settingsForm.value.email = props.auth.user.email;
     settingsForm.value.notification_email = props.auth.user.notification_email || '';
+    loadProfilePicPreview();
 }
 
 async function saveSettings() {
@@ -445,11 +473,16 @@ async function saveSettings() {
     settingsSaved.value = false;
     settingsErrors.value = {};
     try {
-        await axios.put('/api/profile/basic', {
-            name: settingsForm.value.name,
-            email: settingsForm.value.email,
-            notification_email: settingsForm.value.notification_email || null,
+        const fd = new FormData();
+        fd.append('name', settingsForm.value.name);
+        fd.append('email', settingsForm.value.email);
+        if (settingsForm.value.notification_email) fd.append('notification_email', settingsForm.value.notification_email);
+        if (profilePicFile.value) fd.append('profile_picture', profilePicFile.value);
+
+        await axios.post('/api/profile/basic', fd, {
+            headers: { 'Content-Type': 'multipart/form-data' },
         });
+        profilePicFile.value = null;
         settingsSaved.value = true;
         setTimeout(() => { settingsSaved.value = false; }, 2500);
     } catch (e) {
@@ -1544,9 +1577,33 @@ onUnmounted(() => {
                     <!-- Profile Info -->
                     <div class="card p-6">
                         <h2 class="text-base font-semibold text-surface-100 mb-1">Profile Information</h2>
-                        <p class="text-sm text-surface-400 mb-5">Update your name and email address.</p>
+                        <p class="text-sm text-surface-400 mb-5">Update your photo, name and email address.</p>
 
                         <div class="space-y-4">
+                            <!-- Profile Picture -->
+                            <div class="flex items-center gap-4">
+                                <div class="relative group cursor-pointer" @click="$refs.profilePicInput.click()">
+                                    <div class="w-20 h-20 rounded-full overflow-hidden ring-2 ring-surface-700 bg-surface-800 flex items-center justify-center">
+                                        <img v-if="profilePicPreview" :src="profilePicPreview" class="w-full h-full object-cover" draggable="false" @contextmenu.prevent />
+                                        <span v-else class="text-2xl font-bold text-surface-500">{{ (props.auth.user.name || '?')[0].toUpperCase() }}</span>
+                                    </div>
+                                    <div class="absolute inset-0 rounded-full bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+                                        </svg>
+                                    </div>
+                                </div>
+                                <div>
+                                    <button @click="$refs.profilePicInput.click()" class="text-sm text-brand hover:text-brand/80 font-medium">
+                                        {{ profilePicPreview ? 'Change Photo' : 'Upload Photo' }}
+                                    </button>
+                                    <p class="text-xs text-surface-500 mt-0.5">JPG, PNG up to 5MB</p>
+                                </div>
+                                <input ref="profilePicInput" type="file" accept="image/*" class="hidden" @change="handleProfilePic" />
+                            </div>
+                            <p v-if="settingsErrors.profile_picture" class="text-xs text-red-400 -mt-2">{{ settingsErrors.profile_picture[0] }}</p>
+
                             <div>
                                 <label class="block text-xs font-medium text-surface-400 mb-1.5">Name</label>
                                 <input v-model="settingsForm.name" type="text" class="input-field text-sm" placeholder="Your name" />
