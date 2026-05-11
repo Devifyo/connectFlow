@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
+use App\Models\AttendanceOverride;
 use App\Models\TimeLog;
 use Carbon\Carbon;
 
@@ -133,6 +134,11 @@ class TimeLogController extends Controller
         $userCreatedAt = Carbon::parse($user->created_at)->startOfDay();
         $minHours = (float) ($user->min_hours_per_day ?: 8);
 
+        $overrides = AttendanceOverride::where('user_id', $user->id)
+            ->whereBetween('date', [$startOfMonth->toDateString(), $startOfMonth->copy()->endOfMonth()->toDateString()])
+            ->get()
+            ->keyBy(fn ($o) => $o->date->format('Y-m-d'));
+
         $days = [];
         $totalWorkedHours = 0.0;
         $presentDays = 0;
@@ -145,6 +151,7 @@ class TimeLogController extends Controller
             $isFuture = $d->gt($today);
             $isBeforeJoin = $d->lt($userCreatedAt);
 
+            $override = $overrides->get($dateKey);
             $dayLogs = $grouped->get($dateKey, collect());
             $dayHours = 0.0;
 
@@ -154,6 +161,10 @@ class TimeLogController extends Controller
                 } elseif ($d->eq($today)) {
                     $dayHours += abs(Carbon::now('UTC')->floatDiffInHours($log->login_time));
                 }
+            }
+
+            if ($override && $override->manual_hours !== null) {
+                $dayHours = (float) $override->manual_hours;
             }
 
             $dayHours = round($dayHours, 2);
@@ -174,8 +185,12 @@ class TimeLogController extends Controller
 
             $pct = $minHours > 0 ? ($dayHours / $minHours) * 100 : 0;
 
-            $status = 'future';
-            if ($isBeforeJoin) {
+            if ($override) {
+                $status = $override->status;
+                if ($status === 'present') { $presentDays++; $totalWorkedHours += $dayHours; }
+                elseif ($status === 'half_day') { $halfDays++; $totalWorkedHours += $dayHours; }
+                elseif ($status === 'absent') { $absentDays++; }
+            } elseif ($isBeforeJoin) {
                 $status = 'na';
             } elseif ($isFuture) {
                 $status = 'future';
@@ -206,6 +221,7 @@ class TimeLogController extends Controller
                 'hours' => $dayHours,
                 'pct' => round($pct, 1),
                 'sessions' => $sessions,
+                'override' => $override ? ['status' => $override->status, 'note' => $override->note] : null,
             ];
         }
 

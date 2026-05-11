@@ -1303,12 +1303,17 @@ onUnmounted(() => {
                                         <span class="text-surface-600 ml-1.5 text-xs">{{ day.date }}</span>
                                     </td>
                                     <td class="px-4 py-3">
-                                        <span v-if="day.status === 'present'" class="badge-success">Present</span>
-                                        <span v-else-if="day.status === 'half_day'" class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">Half Day</span>
-                                        <span v-else-if="day.status === 'absent'" class="badge-danger">Absent</span>
-                                        <span v-else-if="day.status === 'weekend'" class="badge-neutral">Weekend</span>
-                                        <span v-else-if="day.status === 'future'" class="text-xs text-surface-600">--</span>
-                                        <span v-else class="text-xs text-surface-600">--</span>
+                                        <div class="flex items-center gap-1.5">
+                                            <span v-if="day.status === 'present'" class="badge-success">Present</span>
+                                            <span v-else-if="day.status === 'half_day'" class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">Half Day</span>
+                                            <span v-else-if="day.status === 'absent'" class="badge-danger">Absent</span>
+                                            <span v-else-if="day.status === 'week_off'" class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-violet-500/10 text-violet-400 border border-violet-500/20">Week Off</span>
+                                            <span v-else-if="day.status === 'weekend'" class="badge-neutral">Weekend</span>
+                                            <span v-else-if="day.status === 'future'" class="text-xs text-surface-600">--</span>
+                                            <span v-else class="text-xs text-surface-600">--</span>
+                                            <span v-if="day.override" class="text-[9px] text-violet-400/70 italic" :title="day.override.note || 'Adjusted by admin'">adjusted</span>
+                                        </div>
+                                        <p v-if="day.override?.note" class="text-[10px] text-surface-500 mt-0.5 italic">{{ day.override.note }}</p>
                                     </td>
                                     <td class="px-4 py-3">
                                         <div v-if="day.hours > 0 && day.status !== 'future' && day.status !== 'na'" class="flex items-center gap-2">
@@ -1397,6 +1402,7 @@ onUnmounted(() => {
                                     <span v-if="day.status === 'present'" class="badge-success text-[10px]">Present</span>
                                     <span v-else-if="day.status === 'half_day'" class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">Half Day</span>
                                     <span v-else-if="day.status === 'absent'" class="badge-danger text-[10px]">Absent</span>
+                                    <span v-else-if="day.status === 'week_off'" class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-violet-500/10 text-violet-400 border border-violet-500/20">Week Off</span>
                                     <span v-else-if="day.status === 'weekend'" class="badge-neutral text-[10px]">Weekend</span>
                                     <span v-else class="text-[10px] text-surface-600">--</span>
                                     <svg v-if="day.sessions.length > 0" class="w-3.5 h-3.5 text-surface-600 transition-transform" :class="{ 'rotate-180': expandedDay === day.date }" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
@@ -1404,6 +1410,7 @@ onUnmounted(() => {
                                     </svg>
                                 </div>
                             </div>
+                            <p v-if="day.override?.note" class="text-[10px] text-surface-500 mt-1 italic pl-8">{{ day.override.note }}</p>
                             <div v-if="day.hours > 0 && day.status !== 'future' && day.status !== 'na'" class="flex items-center gap-2 mt-2">
                                 <div class="flex-1 h-1.5 rounded-full bg-surface-700/50 overflow-hidden">
                                     <div
