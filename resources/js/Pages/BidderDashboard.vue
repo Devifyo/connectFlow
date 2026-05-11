@@ -1311,7 +1311,7 @@ onUnmounted(() => {
                                             <span v-else-if="day.status === 'weekend'" class="badge-neutral">Weekend</span>
                                             <span v-else-if="day.status === 'future'" class="text-xs text-surface-600">--</span>
                                             <span v-else class="text-xs text-surface-600">--</span>
-                                            <span v-if="day.override" class="text-[9px] text-violet-400/70 italic" :title="day.override.note || 'Adjusted by admin'">adjusted</span>
+                                            <span v-if="day.override?.adjusted" class="text-[9px] text-violet-400/70 italic">adjusted</span>
                                         </div>
                                         <p v-if="day.override?.note" class="text-[10px] text-surface-500 mt-0.5 italic">{{ day.override.note }}</p>
                                     </td>

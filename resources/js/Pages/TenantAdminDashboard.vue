@@ -284,7 +284,7 @@ const memberAttLoading = ref(false);
 const attYear = ref(new Date().getFullYear());
 const attMonth = ref(new Date().getMonth() + 1);
 const dayEditOpen = ref(null);
-const dayEditForm = ref({ status: 'present', manual_hours: '', note: '' });
+const dayEditForm = ref({ status: 'present', manual_hours: '', note: '', show_status_to_member: false, show_note_to_member: false });
 const dayEditLoading = ref(false);
 
 const statusLabels = { present: 'Present', absent: 'Absent', week_off: 'Week Off', half_day: 'Half Day', weekend: 'Weekend', future: 'Future', na: 'N/A' };
@@ -373,6 +373,8 @@ function openDayEdit(day) {
         status: day.override?.status || day.status || 'present',
         manual_hours: day.override?.hours ?? (day.hours || ''),
         note: day.override?.note || '',
+        show_status_to_member: day.override?.show_status_to_member || false,
+        show_note_to_member: day.override?.show_note_to_member || false,
     };
 }
 
@@ -384,6 +386,8 @@ async function saveDayEdit() {
             status: dayEditForm.value.status,
             manual_hours: dayEditForm.value.manual_hours !== '' ? Number(dayEditForm.value.manual_hours) : null,
             note: dayEditForm.value.note || null,
+            show_status_to_member: dayEditForm.value.show_status_to_member,
+            show_note_to_member: dayEditForm.value.show_note_to_member,
         });
         dayEditOpen.value = null;
         await fetchMemberAttendance();
@@ -1426,6 +1430,20 @@ onUnmounted(() => {
                                                     <input v-model="dayEditForm.note" type="text" maxlength="255"
                                                         class="input-field w-full text-xs" placeholder="Optional" />
                                                 </div>
+                                            </div>
+                                            <div class="flex flex-wrap items-center gap-x-5 gap-y-2 mt-3 pt-3 border-t border-surface-700/20">
+                                                <label class="flex items-center gap-2 cursor-pointer group">
+                                                    <div class="relative w-8 h-4 rounded-full transition-colors" :class="dayEditForm.show_status_to_member ? 'bg-brand' : 'bg-surface-700'" @click="dayEditForm.show_status_to_member = !dayEditForm.show_status_to_member">
+                                                        <div class="absolute top-0.5 w-3 h-3 rounded-full bg-white shadow transition-transform" :class="dayEditForm.show_status_to_member ? 'translate-x-4' : 'translate-x-0.5'"></div>
+                                                    </div>
+                                                    <span class="text-[10px] text-surface-400 group-hover:text-surface-300">Show adjusted to member</span>
+                                                </label>
+                                                <label class="flex items-center gap-2 cursor-pointer group">
+                                                    <div class="relative w-8 h-4 rounded-full transition-colors" :class="dayEditForm.show_note_to_member ? 'bg-brand' : 'bg-surface-700'" @click="dayEditForm.show_note_to_member = !dayEditForm.show_note_to_member">
+                                                        <div class="absolute top-0.5 w-3 h-3 rounded-full bg-white shadow transition-transform" :class="dayEditForm.show_note_to_member ? 'translate-x-4' : 'translate-x-0.5'"></div>
+                                                    </div>
+                                                    <span class="text-[10px] text-surface-400 group-hover:text-surface-300">Show note to member</span>
+                                                </label>
                                             </div>
                                             <div class="flex flex-wrap items-center gap-2 mt-3">
                                                 <button @click="saveDayEdit" :disabled="dayEditLoading"

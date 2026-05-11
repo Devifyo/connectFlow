@@ -444,7 +444,13 @@ class TenantAdminController extends Controller
                 'hours' => $dayHours,
                 'pct' => round($pct, 1),
                 'sessions' => $sessions,
-                'override' => $override ? ['status' => $override->status, 'hours' => $override->manual_hours, 'note' => $override->note] : null,
+                'override' => $override ? [
+                    'status' => $override->status,
+                    'hours' => $override->manual_hours,
+                    'note' => $override->note,
+                    'show_status_to_member' => $override->show_status_to_member,
+                    'show_note_to_member' => $override->show_note_to_member,
+                ] : null,
             ];
         }
 
@@ -472,6 +478,8 @@ class TenantAdminController extends Controller
             'status' => 'required|in:present,absent,week_off,half_day',
             'manual_hours' => 'nullable|numeric|min:0|max:24',
             'note' => 'nullable|string|max:255',
+            'show_status_to_member' => 'nullable|boolean',
+            'show_note_to_member' => 'nullable|boolean',
         ]);
 
         $user = User::findOrFail($userId);
@@ -483,6 +491,8 @@ class TenantAdminController extends Controller
                 'status' => $request->status,
                 'manual_hours' => $request->manual_hours,
                 'note' => $request->note,
+                'show_status_to_member' => $request->boolean('show_status_to_member'),
+                'show_note_to_member' => $request->boolean('show_note_to_member'),
                 'marked_by' => auth()->id(),
             ]
         );

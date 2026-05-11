@@ -221,7 +221,10 @@ class TimeLogController extends Controller
                 'hours' => $dayHours,
                 'pct' => round($pct, 1),
                 'sessions' => $sessions,
-                'override' => $override ? ['status' => $override->status, 'note' => $override->note] : null,
+                'override' => $override ? [
+                    'adjusted' => $override->show_status_to_member,
+                    'note' => $override->show_note_to_member ? $override->note : null,
+                ] : null,
             ];
         }
 
