@@ -1338,10 +1338,14 @@ onUnmounted(() => {
 
                                     <!-- Attendance summary -->
                                     <div v-else-if="memberAttendance" class="p-3 sm:p-4">
-                                        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3 mb-4">
+                                        <div class="grid grid-cols-2 sm:grid-cols-5 gap-2 sm:gap-3 mb-4">
                                             <div class="text-center p-2 rounded-lg bg-surface-800/30">
                                                 <p class="text-base sm:text-lg font-bold text-emerald-400">{{ memberAttendance.summary.present_days }}</p>
                                                 <p class="text-[10px] text-surface-500">Present</p>
+                                            </div>
+                                            <div class="text-center p-2 rounded-lg bg-surface-800/30">
+                                                <p class="text-base sm:text-lg font-bold text-amber-400">{{ memberAttendance.summary.half_days || 0 }}</p>
+                                                <p class="text-[10px] text-surface-500">Half Day</p>
                                             </div>
                                             <div class="text-center p-2 rounded-lg bg-surface-800/30">
                                                 <p class="text-base sm:text-lg font-bold text-red-400">{{ memberAttendance.summary.absent_days }}</p>
@@ -1355,6 +1359,10 @@ onUnmounted(() => {
                                                 <p class="text-base sm:text-lg font-bold text-surface-200">{{ memberAttendance.summary.avg_hours_per_day }}h</p>
                                                 <p class="text-[10px] text-surface-500">Avg/Day</p>
                                             </div>
+                                        </div>
+                                        <div class="flex items-center gap-2 mb-4 px-1">
+                                            <span class="text-[10px] text-surface-500">Min hours:</span>
+                                            <span class="text-xs font-semibold text-surface-300">{{ memberAttendance.min_hours_per_day }}h/day</span>
                                         </div>
 
                                         <!-- Day grid -->
@@ -1375,7 +1383,11 @@ onUnmounted(() => {
                                                     day.override ? 'ring-1 ring-violet-500/30' : ''
                                                 ]">
                                                 <p class="text-xs font-medium text-surface-300">{{ day.day }}</p>
-                                                <div class="w-2 h-2 rounded-full mx-auto mt-0.5" :class="statusDotColors[day.status] || 'bg-surface-700'"></div>
+                                                <div v-if="day.hours > 0 && day.status !== 'future' && day.status !== 'na'" class="w-full h-1.5 rounded-full bg-surface-700/50 mt-1 overflow-hidden">
+                                                    <div class="h-full rounded-full transition-all" :style="{ width: Math.min(day.pct, 100) + '%' }"
+                                                        :class="day.pct >= 100 ? 'bg-emerald-400' : day.pct >= 50 ? 'bg-amber-400' : 'bg-red-400'"></div>
+                                                </div>
+                                                <div v-else class="w-2 h-2 rounded-full mx-auto mt-0.5" :class="statusDotColors[day.status] || 'bg-surface-700'"></div>
                                                 <p v-if="day.hours > 0" class="text-[9px] text-surface-500 mt-0.5">{{ day.hours }}h</p>
                                             </div>
                                         </div>

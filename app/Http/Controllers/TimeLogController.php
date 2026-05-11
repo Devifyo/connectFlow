@@ -129,12 +129,15 @@ class TimeLogController extends Controller
 
         $grouped = $logs->groupBy(fn ($log) => $log->date->format('Y-m-d'));
 
-        $userCreatedAt = Carbon::parse(auth()->user()->created_at)->startOfDay();
+        $user = auth()->user();
+        $userCreatedAt = Carbon::parse($user->created_at)->startOfDay();
+        $minHours = (float) ($user->min_hours_per_day ?: 8);
 
         $days = [];
         $totalWorkedHours = 0.0;
         $presentDays = 0;
         $absentDays = 0;
+        $halfDays = 0;
 
         for ($d = $startOfMonth->copy(); $d->lte($startOfMonth->copy()->endOfMonth()); $d->addDay()) {
             $dateKey = $d->format('Y-m-d');
@@ -169,14 +172,24 @@ class TimeLogController extends Controller
                 ];
             })->values();
 
+            $pct = $minHours > 0 ? ($dayHours / $minHours) * 100 : 0;
+
             $status = 'future';
             if ($isBeforeJoin) {
                 $status = 'na';
             } elseif ($isFuture) {
                 $status = 'future';
             } elseif ($dayLogs->count() > 0 || $dayHours > 0) {
-                $status = 'present';
-                $presentDays++;
+                if ($pct >= 100) {
+                    $status = 'present';
+                    $presentDays++;
+                } elseif ($pct >= 50) {
+                    $status = 'half_day';
+                    $halfDays++;
+                } else {
+                    $status = 'absent';
+                    $absentDays++;
+                }
                 $totalWorkedHours += $dayHours;
             } elseif ($isWeekend) {
                 $status = 'weekend';
@@ -191,6 +204,7 @@ class TimeLogController extends Controller
                 'day_name' => $d->format('D'),
                 'status' => $status,
                 'hours' => $dayHours,
+                'pct' => round($pct, 1),
                 'sessions' => $sessions,
             ];
         }
@@ -199,10 +213,12 @@ class TimeLogController extends Controller
             'year' => $year,
             'month' => $month,
             'month_name' => $startOfMonth->format('F'),
+            'min_hours_per_day' => $minHours,
             'days' => $days,
             'summary' => [
                 'total_worked_hours' => round($totalWorkedHours, 2),
                 'present_days' => $presentDays,
+                'half_days' => $halfDays,
                 'absent_days' => $absentDays,
                 'avg_hours_per_day' => $presentDays > 0 ? round($totalWorkedHours / $presentDays, 2) : 0,
             ],

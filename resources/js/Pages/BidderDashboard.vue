@@ -356,10 +356,11 @@ function toLocalTimeShort(isoStr) {
 
 // --- Attendance ---
 const attendanceDays = ref([]);
-const attendanceSummary = ref({ total_worked_hours: 0, present_days: 0, absent_days: 0, avg_hours_per_day: 0 });
+const attendanceSummary = ref({ total_worked_hours: 0, present_days: 0, half_days: 0, absent_days: 0, avg_hours_per_day: 0 });
 const attendanceMonth = ref(new Date().getMonth() + 1);
 const attendanceYear = ref(new Date().getFullYear());
 const attendanceMonthName = ref('');
+const attendanceMinHours = ref(8);
 const isLoadingAttendance = ref(false);
 const expandedDay = ref(null);
 
@@ -372,6 +373,7 @@ async function fetchAttendance() {
         attendanceDays.value = data.days;
         attendanceSummary.value = data.summary;
         attendanceMonthName.value = data.month_name;
+        attendanceMinHours.value = data.min_hours_per_day || 8;
     } catch (e) {
         console.error(e);
     } finally {
@@ -1199,6 +1201,10 @@ onUnmounted(() => {
                                 <span class="text-surface-400">Present</span>
                             </div>
                             <div class="flex items-center gap-1.5">
+                                <span class="w-2.5 h-2.5 rounded-sm bg-amber-400/40"></span>
+                                <span class="text-surface-400">Half Day</span>
+                            </div>
+                            <div class="flex items-center gap-1.5">
                                 <span class="w-2.5 h-2.5 rounded-sm bg-red-500/40"></span>
                                 <span class="text-surface-400">Absent</span>
                             </div>
@@ -1210,10 +1216,14 @@ onUnmounted(() => {
                     </div>
 
                     <!-- Mobile legend -->
-                    <div class="flex sm:hidden items-center justify-center gap-4 mt-3 text-[10px]">
+                    <div class="flex sm:hidden items-center justify-center gap-4 mt-3 text-[10px] flex-wrap">
                         <div class="flex items-center gap-1">
                             <span class="w-2 h-2 rounded-sm bg-brand/30"></span>
                             <span class="text-surface-400">Present</span>
+                        </div>
+                        <div class="flex items-center gap-1">
+                            <span class="w-2 h-2 rounded-sm bg-amber-400/40"></span>
+                            <span class="text-surface-400">Half Day</span>
                         </div>
                         <div class="flex items-center gap-1">
                             <span class="w-2 h-2 rounded-sm bg-red-500/40"></span>
@@ -1226,10 +1236,14 @@ onUnmounted(() => {
                     </div>
 
                     <!-- Summary stats -->
-                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4 pt-4 border-t border-surface-700/30">
+                    <div class="grid grid-cols-2 sm:grid-cols-5 gap-3 mt-4 pt-4 border-t border-surface-700/30">
                         <div>
                             <span class="text-xs text-surface-500">Days Present</span>
                             <p class="text-lg font-semibold text-brand mt-0.5">{{ attendanceSummary.present_days }}</p>
+                        </div>
+                        <div>
+                            <span class="text-xs text-surface-500">Half Days</span>
+                            <p class="text-lg font-semibold text-amber-400 mt-0.5">{{ attendanceSummary.half_days || 0 }}</p>
                         </div>
                         <div>
                             <span class="text-xs text-surface-500">Days Absent</span>
@@ -1243,6 +1257,10 @@ onUnmounted(() => {
                             <span class="text-xs text-surface-500">Avg / Day</span>
                             <p class="text-lg font-semibold text-surface-100 mt-0.5">{{ formatHours(attendanceSummary.avg_hours_per_day) }}</p>
                         </div>
+                    </div>
+                    <div class="flex items-center gap-2 mt-3">
+                        <span class="text-xs text-surface-500">Min hours:</span>
+                        <span class="text-sm font-semibold text-surface-300">{{ attendanceMinHours }}h/day</span>
                     </div>
                 </div>
 
@@ -1273,7 +1291,8 @@ onUnmounted(() => {
                                     class="border-b border-surface-800/20 transition-colors cursor-pointer"
                                     :class="{
                                         'bg-red-500/[0.04] hover:bg-red-500/[0.08]': day.status === 'absent',
-                                        'hover:bg-surface-800/20': day.status !== 'absent',
+                                        'bg-amber-500/[0.04] hover:bg-amber-500/[0.08]': day.status === 'half_day',
+                                        'hover:bg-surface-800/20': day.status !== 'absent' && day.status !== 'half_day',
                                         'opacity-40': day.status === 'future' || day.status === 'na',
                                     }"
                                     @click="day.sessions.length > 0 ? toggleDayDetail(day.date) : null"
@@ -1285,21 +1304,22 @@ onUnmounted(() => {
                                     </td>
                                     <td class="px-4 py-3">
                                         <span v-if="day.status === 'present'" class="badge-success">Present</span>
+                                        <span v-else-if="day.status === 'half_day'" class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">Half Day</span>
                                         <span v-else-if="day.status === 'absent'" class="badge-danger">Absent</span>
                                         <span v-else-if="day.status === 'weekend'" class="badge-neutral">Weekend</span>
                                         <span v-else-if="day.status === 'future'" class="text-xs text-surface-600">--</span>
                                         <span v-else class="text-xs text-surface-600">--</span>
                                     </td>
                                     <td class="px-4 py-3">
-                                        <div v-if="day.status === 'present'" class="flex items-center gap-2">
+                                        <div v-if="day.hours > 0 && day.status !== 'future' && day.status !== 'na'" class="flex items-center gap-2">
                                             <div class="flex-1 max-w-[120px] h-1.5 rounded-full bg-surface-700/50 overflow-hidden">
                                                 <div
                                                     class="h-full rounded-full transition-all duration-300"
-                                                    :class="day.hours >= 8 ? 'bg-brand' : day.hours >= 4 ? 'bg-amber-400' : 'bg-red-400'"
-                                                    :style="{ width: Math.min(day.hours / 8 * 100, 100) + '%' }"
+                                                    :class="day.pct >= 100 ? 'bg-brand' : day.pct >= 50 ? 'bg-amber-400' : 'bg-red-400'"
+                                                    :style="{ width: Math.min(day.pct, 100) + '%' }"
                                                 ></div>
                                             </div>
-                                            <span class="font-mono text-xs font-medium" :class="day.hours >= 8 ? 'text-brand' : day.hours >= 4 ? 'text-amber-400' : 'text-red-400'">
+                                            <span class="font-mono text-xs font-medium" :class="day.pct >= 100 ? 'text-brand' : day.pct >= 50 ? 'text-amber-400' : 'text-red-400'">
                                                 {{ formatHours(day.hours) }}
                                             </span>
                                         </div>
@@ -1360,6 +1380,7 @@ onUnmounted(() => {
                             class="card p-3 transition-colors"
                             :class="{
                                 'bg-red-500/[0.04]': day.status === 'absent',
+                                'bg-amber-500/[0.04]': day.status === 'half_day',
                                 'opacity-40': day.status === 'future' || day.status === 'na',
                             }"
                             @click="day.sessions.length > 0 ? toggleDayDetail(day.date) : null"
@@ -1374,6 +1395,7 @@ onUnmounted(() => {
                                 </div>
                                 <div class="flex items-center gap-2.5">
                                     <span v-if="day.status === 'present'" class="badge-success text-[10px]">Present</span>
+                                    <span v-else-if="day.status === 'half_day'" class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">Half Day</span>
                                     <span v-else-if="day.status === 'absent'" class="badge-danger text-[10px]">Absent</span>
                                     <span v-else-if="day.status === 'weekend'" class="badge-neutral text-[10px]">Weekend</span>
                                     <span v-else class="text-[10px] text-surface-600">--</span>
@@ -1382,15 +1404,15 @@ onUnmounted(() => {
                                     </svg>
                                 </div>
                             </div>
-                            <div v-if="day.status === 'present'" class="flex items-center gap-2 mt-2">
+                            <div v-if="day.hours > 0 && day.status !== 'future' && day.status !== 'na'" class="flex items-center gap-2 mt-2">
                                 <div class="flex-1 h-1.5 rounded-full bg-surface-700/50 overflow-hidden">
                                     <div
                                         class="h-full rounded-full transition-all duration-300"
-                                        :class="day.hours >= 8 ? 'bg-brand' : day.hours >= 4 ? 'bg-amber-400' : 'bg-red-400'"
-                                        :style="{ width: Math.min(day.hours / 8 * 100, 100) + '%' }"
+                                        :class="day.pct >= 100 ? 'bg-brand' : day.pct >= 50 ? 'bg-amber-400' : 'bg-red-400'"
+                                        :style="{ width: Math.min(day.pct, 100) + '%' }"
                                     ></div>
                                 </div>
-                                <span class="font-mono text-xs font-medium flex-shrink-0" :class="day.hours >= 8 ? 'text-brand' : day.hours >= 4 ? 'text-amber-400' : 'text-red-400'">
+                                <span class="font-mono text-xs font-medium flex-shrink-0" :class="day.pct >= 100 ? 'text-brand' : day.pct >= 50 ? 'text-amber-400' : 'text-red-400'">
                                     {{ formatHours(day.hours) }}
                                 </span>
                                 <span v-if="day.sessions.length > 0" class="text-[10px] text-surface-500 flex-shrink-0">{{ day.sessions.length }}s</span>
