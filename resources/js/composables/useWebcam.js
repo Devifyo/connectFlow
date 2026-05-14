@@ -55,39 +55,63 @@ export function useWebcam() {
     function startRecording() {
         if (!stream) return;
         recordedChunks = [];
+        if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+            try { mediaRecorder.stop(); } catch {}
+        }
+        mediaRecorder = null;
         const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
             ? 'video/webm;codecs=vp9'
             : 'video/webm';
         try {
-            mediaRecorder = new MediaRecorder(stream, {
+            const recorder = new MediaRecorder(stream, {
                 mimeType,
                 videoBitsPerSecond: 500000,
             });
-            mediaRecorder.ondataavailable = (e) => {
+            recorder.ondataavailable = (e) => {
                 if (e.data && e.data.size > 0) recordedChunks.push(e.data);
             };
-            mediaRecorder.start(200);
+            recorder.start(100);
+            mediaRecorder = recorder;
         } catch (e) {
-            // MediaRecorder not supported — video recording silently skipped
+            mediaRecorder = null;
         }
     }
 
     function stopRecording() {
         return new Promise((resolve) => {
-            if (!mediaRecorder || mediaRecorder.state === 'inactive') {
-                resolve(null);
+            const recorder = mediaRecorder;
+            mediaRecorder = null;
+
+            if (!recorder || recorder.state === 'inactive') {
+                const blob = recordedChunks.length > 0
+                    ? new Blob(recordedChunks, { type: 'video/webm' })
+                    : null;
+                recordedChunks = [];
+                resolve(blob);
                 return;
             }
-            mediaRecorder.onstop = () => {
-                if (recordedChunks.length === 0) {
-                    resolve(null);
-                    return;
-                }
-                const blob = new Blob(recordedChunks, { type: 'video/webm' });
+
+            recorder.onstop = () => {
+                const blob = recordedChunks.length > 0
+                    ? new Blob(recordedChunks, { type: 'video/webm' })
+                    : null;
                 recordedChunks = [];
                 resolve(blob);
             };
-            mediaRecorder.stop();
+
+            try {
+                recorder.requestData();
+            } catch {}
+
+            try {
+                recorder.stop();
+            } catch {
+                const blob = recordedChunks.length > 0
+                    ? new Blob(recordedChunks, { type: 'video/webm' })
+                    : null;
+                recordedChunks = [];
+                resolve(blob);
+            }
         });
     }
 

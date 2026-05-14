@@ -1,7 +1,7 @@
 import { ref, onUnmounted } from 'vue';
 import axios from 'axios';
 
-const CHUNK_SIZE = 512 * 1024; // 512KB per chunk
+const CHUNK_SIZE = 512 * 1024;
 const MAX_RETRIES = 5;
 const BASE_DELAY = 2000;
 const DB_NAME = 'faceVideoQueue';
@@ -12,7 +12,7 @@ let dbPromise = null;
 function openDB() {
     if (dbPromise) return dbPromise;
     dbPromise = new Promise((resolve, reject) => {
-        const req = indexedDB.open(DB_NAME, 1);
+        const req = indexedDB.open(DB_NAME, 2);
         req.onupgradeneeded = () => {
             const db = req.result;
             if (!db.objectStoreNames.contains(STORE_NAME)) {
@@ -28,7 +28,7 @@ function openDB() {
     return dbPromise;
 }
 
-async function persistToQueue(blob, type, timeLogId) {
+async function persistToQueue(blob, type, timeLogId, verified) {
     try {
         const db = await openDB();
         const arrayBuffer = await blob.arrayBuffer();
@@ -38,15 +38,14 @@ async function persistToQueue(blob, type, timeLogId) {
             mimeType: blob.type,
             type,
             timeLogId: timeLogId || null,
+            verified: verified !== false,
             createdAt: Date.now(),
         });
         return new Promise((resolve, reject) => {
             tx.oncomplete = resolve;
             tx.onerror = () => reject(tx.error);
         });
-    } catch {
-        // IndexedDB unavailable — upload will still be attempted in-memory
-    }
+    } catch {}
 }
 
 async function removeFromQueue(id) {
@@ -75,15 +74,15 @@ function sleep(ms) {
     return new Promise(r => setTimeout(r, ms));
 }
 
-async function uploadWithRetry(blob, type, timeLogId, onProgress) {
+async function uploadWithRetry(blob, type, timeLogId, verified, onProgress) {
     const useChunked = blob.size > CHUNK_SIZE * 2;
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         try {
             if (useChunked) {
-                await uploadChunked(blob, type, timeLogId, onProgress);
+                await uploadChunked(blob, type, timeLogId, verified, onProgress);
             } else {
-                await uploadWhole(blob, type, timeLogId, onProgress);
+                await uploadWhole(blob, type, timeLogId, verified, onProgress);
             }
             return true;
         } catch (e) {
@@ -101,11 +100,12 @@ async function uploadWithRetry(blob, type, timeLogId, onProgress) {
     return false;
 }
 
-async function uploadWhole(blob, type, timeLogId, onProgress) {
+async function uploadWhole(blob, type, timeLogId, verified, onProgress) {
     const form = new FormData();
     form.append('video', blob, `${type}_${Date.now()}.webm`);
     form.append('type', type);
     if (timeLogId) form.append('time_log_id', String(timeLogId));
+    form.append('verified', verified ? '1' : '0');
 
     await axios.post('/api/face/upload-video', form, {
         timeout: 120000,
@@ -117,7 +117,7 @@ async function uploadWhole(blob, type, timeLogId, onProgress) {
     });
 }
 
-async function uploadChunked(blob, type, timeLogId, onProgress) {
+async function uploadChunked(blob, type, timeLogId, verified, onProgress) {
     const totalChunks = Math.ceil(blob.size / CHUNK_SIZE);
     const uploadId = `${type}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
@@ -133,6 +133,7 @@ async function uploadChunked(blob, type, timeLogId, onProgress) {
         form.append('total_chunks', String(totalChunks));
         form.append('type', type);
         if (timeLogId) form.append('time_log_id', String(timeLogId));
+        form.append('verified', verified ? '1' : '0');
 
         let chunkAttempt = 0;
         while (true) {
@@ -163,7 +164,8 @@ async function processQueue(onProgress) {
         const items = await getAllQueued();
         for (const item of items) {
             const blob = new Blob([item.buffer], { type: item.mimeType || 'video/webm' });
-            const ok = await uploadWithRetry(blob, item.type, item.timeLogId, onProgress);
+            const verified = item.verified !== false;
+            const ok = await uploadWithRetry(blob, item.type, item.timeLogId, verified, onProgress);
             if (ok) {
                 await removeFromQueue(item.id);
             }
@@ -174,11 +176,11 @@ async function processQueue(onProgress) {
 }
 
 export function useVideoUploader() {
-    const uploadStatus = ref('idle'); // idle | uploading | retrying | done | failed
+    const uploadStatus = ref('idle');
     const uploadProgress = ref(0);
     let active = true;
 
-    function handleProgress({ status, progress, attempt, maxRetries }) {
+    function handleProgress({ status, progress }) {
         if (!active) return;
         if (status === 'uploading') {
             uploadStatus.value = 'uploading';
@@ -188,43 +190,24 @@ export function useVideoUploader() {
         }
     }
 
-    async function queueUpload(blob, type, timeLogId) {
+    async function queueUpload(blob, type, timeLogId, verified = true) {
         if (!blob) return;
-        uploadStatus.value = 'uploading';
-        uploadProgress.value = 0;
 
-        await persistToQueue(blob, type, timeLogId);
-
-        const ok = await uploadWithRetry(blob, type, timeLogId, handleProgress);
-        if (ok) {
-            if (active) {
-                uploadStatus.value = 'done';
-                uploadProgress.value = 100;
+        await persistToQueue(blob, type, timeLogId, verified);
+        uploadWithRetry(blob, type, timeLogId, verified, handleProgress).then(async (ok) => {
+            if (ok) {
+                const items = await getAllQueued();
+                const match = items.find(i => i.type === type && i.timeLogId === (timeLogId || null) && i.verified === verified);
+                if (match) await removeFromQueue(match.id);
             }
-            const items = await getAllQueued();
-            const match = items.find(i => i.type === type && i.timeLogId === (timeLogId || null));
-            if (match) await removeFromQueue(match.id);
-        } else if (active) {
-            uploadStatus.value = 'failed';
-        }
-    }
-
-    async function retryFailed() {
-        uploadStatus.value = 'uploading';
-        uploadProgress.value = 0;
-        await processQueue(handleProgress);
-        if (active) {
-            const remaining = await getAllQueued();
-            uploadStatus.value = remaining.length > 0 ? 'failed' : 'done';
-        }
+        });
     }
 
     onUnmounted(() => {
         active = false;
     });
 
-    // On mount, try to drain any leftover queued uploads from previous sessions
     processQueue(handleProgress);
 
-    return { uploadStatus, uploadProgress, queueUpload, retryFailed };
+    return { uploadStatus, uploadProgress, queueUpload };
 }

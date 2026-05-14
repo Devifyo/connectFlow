@@ -185,12 +185,13 @@ class FaceRecognitionController extends Controller
         }
 
         $videos = $query->orderBy('created_at', 'desc')
-            ->limit(50)
+            ->limit(200)
             ->get()
             ->map(fn ($v) => [
                 'id' => $v->id,
                 'type' => $v->type,
                 'time_log_id' => $v->time_log_id,
+                'verified' => (bool) $v->verified,
                 'created_at' => $v->created_at->toIso8601String(),
             ]);
 

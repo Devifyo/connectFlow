@@ -56,8 +56,26 @@ function onFaceEnrolled() {
     router.reload({ only: ['face_recognition'] });
 }
 
-let pendingPunchVideoBlob = null;
+let punchRecordingActive = false;
+let pendingAttemptClips = [];
 const punchMapRef = ref(null);
+
+async function closePunchModal() {
+    if (punchRecordingActive) {
+        const clip = await stopPunchRecording();
+        punchRecordingActive = false;
+        if (clip) pendingAttemptClips.push({ blob: clip, verified: false });
+    }
+    if (pendingAttemptClips.length) {
+        const type = isPunchedIn.value ? 'punch_out' : 'punch_in';
+        for (const entry of pendingAttemptClips) {
+            queueVideoUpload(entry.blob, type, null, entry.verified);
+        }
+        pendingAttemptClips = [];
+    }
+    stopPunchCam();
+    showPunchModal.value = false;
+}
 
 const formattedElapsed = computed(() => {
     const h = Math.floor(elapsedSeconds.value / 3600);
@@ -176,6 +194,7 @@ async function confirmPunch() {
         faceError.value = '';
         await startPunchCam();
         startPunchRecording();
+        punchRecordingActive = true;
         return;
     }
 
@@ -185,61 +204,85 @@ async function confirmPunch() {
 async function verifyAndPunch() {
     faceVerifying.value = true;
     faceError.value = '';
+
+    const image = capturePunchFrame();
+    if (!image) {
+        faceError.value = 'Could not capture image. Please try again.';
+        faceVerifying.value = false;
+        return;
+    }
+
+    let verified = false;
     try {
-        const image = capturePunchFrame();
-        if (!image) {
-            faceError.value = 'Could not capture image. Please try again.';
-            return;
-        }
         const { data } = await axios.post('/api/face/verify', { image });
-        if (data.verified) {
-            pendingPunchVideoBlob = await stopPunchRecording();
-            stopPunchCam();
-            await executePunch();
-        } else {
+        verified = !!data.verified;
+        if (!verified) {
             faceError.value = data.error || 'Face not recognized. Please try again.';
         }
     } catch (e) {
         faceError.value = e.response?.data?.error || 'Verification failed. Please try again.';
-    } finally {
-        faceVerifying.value = false;
     }
+
+    const clip = punchRecordingActive ? await stopPunchRecording() : null;
+    punchRecordingActive = false;
+
+    if (clip) {
+        pendingAttemptClips.push({ blob: clip, verified });
+    }
+
+    if (verified) {
+        faceVerifying.value = false;
+        await executePunch();
+        return;
+    }
+
+    startPunchRecording();
+    punchRecordingActive = true;
+    faceVerifying.value = false;
 }
 
 async function executePunch() {
     punchLoading.value = true;
     const wasPunchedIn = isPunchedIn.value;
+    const clips = [...pendingAttemptClips];
+    pendingAttemptClips = [];
+
     try {
         const payload = {
             latitude: punchLocation.value.lat,
             longitude: punchLocation.value.lng,
             address: punchLocation.value.address,
         };
+        const type = wasPunchedIn ? 'punch_out' : 'punch_in';
+        let logId = null;
+
         if (wasPunchedIn) {
             const { data } = await axios.post('/api/time/punch-out', payload);
+            logId = data.log_id;
             isPunchedIn.value = false;
             punchedInAt.value = null;
             stopClock();
             elapsedSeconds.value = 0;
             fetchTimeStatus();
-            if (pendingPunchVideoBlob) {
-                queueVideoUpload(pendingPunchVideoBlob, 'punch_out', data.log_id);
-                pendingPunchVideoBlob = null;
-            }
         } else {
             const { data } = await axios.post('/api/time/punch-in', payload);
+            logId = data.log_id;
             isPunchedIn.value = true;
             punchedInAt.value = data.punched_in_at || data.log?.login_time;
             startClock(punchedInAt.value);
-            if (pendingPunchVideoBlob) {
-                queueVideoUpload(pendingPunchVideoBlob, 'punch_in', data.log_id);
-                pendingPunchVideoBlob = null;
-            }
         }
+
+        for (const entry of clips) {
+            queueVideoUpload(entry.blob, type, logId, entry.verified);
+        }
+
         stopPunchCam();
         showPunchModal.value = false;
     } catch (e) {
-        pendingPunchVideoBlob = null;
+        const type = wasPunchedIn ? 'punch_out' : 'punch_in';
+        for (const entry of clips) {
+            queueVideoUpload(entry.blob, type, null, entry.verified);
+        }
         punchLocationError.value = e.response?.data?.error || 'Something went wrong. Please try again.';
         punchStep.value = 'location';
     } finally {
@@ -1834,7 +1877,7 @@ onUnmounted(() => {
 
         <!-- Punch In/Out Modal -->
         <Teleport to="body">
-            <div v-if="showPunchModal" class="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 backdrop-blur-sm" @click.self="showPunchModal = false; stopPunchCam();">
+            <div v-if="showPunchModal" class="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 backdrop-blur-sm" @click.self="closePunchModal();">
                 <div class="bg-surface-900 border border-surface-700/50 rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
                     <!-- Header -->
                     <div class="px-6 py-4 border-b border-surface-800/50 flex items-center justify-between">
@@ -1849,7 +1892,7 @@ onUnmounted(() => {
                             <div class="w-2 h-2 rounded-full" :class="punchStep === 'location' ? 'bg-brand' : 'bg-brand/30'"></div>
                             <div class="w-2 h-2 rounded-full" :class="punchStep === 'face' ? 'bg-brand' : 'bg-brand/30'"></div>
                         </div>
-                        <button @click="showPunchModal = false; stopPunchCam();" class="text-surface-500 hover:text-surface-300 transition-colors">
+                        <button @click="closePunchModal();" class="text-surface-500 hover:text-surface-300 transition-colors">
                             <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                                 <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
                             </svg>
@@ -1950,7 +1993,7 @@ onUnmounted(() => {
 
                     <!-- Footer -->
                     <div class="px-6 py-4 border-t border-surface-800/50 flex items-center justify-end gap-3">
-                        <button @click="showPunchModal = false; stopPunchCam();" class="btn-ghost text-xs px-4 py-2">Cancel</button>
+                        <button @click="closePunchModal();" class="btn-ghost text-xs px-4 py-2">Cancel</button>
 
                         <!-- Location step button -->
                         <button v-if="punchStep === 'location'"
