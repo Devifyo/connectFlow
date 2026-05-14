@@ -12,6 +12,7 @@ import { VueTelInput } from 'vue-tel-input';
 import 'vue-tel-input/vue-tel-input.css';
 import { vProtectedSrc } from '@/directives/protectedSrc';
 import FaceEnrollmentModal from '@/Components/FaceEnrollmentModal.vue';
+import FaceScanCapture from '@/Components/FaceScanCapture.vue';
 import { useWebcam } from '@/composables/useWebcam';
 import { useVideoUploader } from '@/composables/useVideoUploader';
 
@@ -661,6 +662,50 @@ const savingPassword = ref(false);
 const passwordError = ref('');
 const passwordSuccess = ref(false);
 
+// Face enrollment in profile
+const profileFaceStep = ref('idle');
+const profileFaceEnrolling = ref(false);
+const profileFaceError = ref('');
+const profileFaceSuccess = ref(false);
+const { queueUpload: queueProfileFaceUpload } = useVideoUploader();
+
+function resetProfileFace() {
+    profileFaceStep.value = 'idle';
+    profileFaceEnrolling.value = false;
+    profileFaceError.value = '';
+}
+
+function startProfileFaceScan() {
+    profileFaceError.value = '';
+    profileFaceSuccess.value = false;
+    profileFaceStep.value = 'scanning';
+}
+
+async function onProfileFaceScanComplete(result) {
+    profileFaceStep.value = 'processing';
+    profileFaceEnrolling.value = true;
+    profileFaceError.value = '';
+    try {
+        await axios.post('/api/face/enroll', { image: result.image });
+        if (result.video) {
+            queueProfileFaceUpload(result.video, 'enrollment');
+        }
+        faceEnrolled.value = true;
+        profileFaceSuccess.value = true;
+        profileFaceStep.value = 'idle';
+        router.reload({ only: ['face_recognition'] });
+    } catch (e) {
+        profileFaceError.value = e.response?.data?.error || 'Enrollment failed. Please try again.';
+        profileFaceStep.value = 'idle';
+    } finally {
+        profileFaceEnrolling.value = false;
+    }
+}
+
+function onProfileFaceScanCancel() {
+    profileFaceStep.value = 'idle';
+}
+
 const telInputOptions = { mode: 'international', preferredCountries: ['IN', 'US', 'GB', 'AE', 'CA', 'AU'], defaultCountry: 'IN' };
 const telDropdownOptions = { showDialCodeInSelection: true, showFlags: true, showSearchBox: true };
 
@@ -704,6 +749,7 @@ async function openProfileModal() {
     passwordForm.value = { current_password: '', password: '', password_confirmation: '' };
     passwordError.value = '';
     passwordSuccess.value = false;
+    resetProfileFace();
     showProfileModal.value = true;
 }
 
@@ -1711,12 +1757,12 @@ onUnmounted(() => {
 
         <!-- Profile Edit Modal -->
         <Teleport to="body">
-            <div v-if="showProfileModal" class="fixed inset-0 z-[90] flex items-center justify-center bg-black/60 backdrop-blur-sm" @click.self="showProfileModal = false">
+            <div v-if="showProfileModal" class="fixed inset-0 z-[90] flex items-center justify-center bg-black/60 backdrop-blur-sm" @click.self="resetProfileFace(); showProfileModal = false">
                 <div class="w-full max-w-lg mx-4 bg-surface-900 border border-surface-800/50 rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
                     <!-- Header -->
                     <div class="px-6 py-4 border-b border-surface-800/50 flex items-center justify-between flex-shrink-0">
                         <h2 class="text-base font-semibold text-surface-100">My Profile</h2>
-                        <button @click="showProfileModal = false" class="text-surface-400 hover:text-surface-200 transition-colors">
+                        <button @click="resetProfileFace(); showProfileModal = false" class="text-surface-400 hover:text-surface-200 transition-colors">
                             <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
                         </button>
                     </div>
@@ -1733,6 +1779,12 @@ onUnmounted(() => {
                             :class="profileTab === 'password' ? 'text-surface-100 bg-surface-800/50' : 'text-surface-400 hover:text-surface-300'">
                             Password
                             <div v-if="profileTab === 'password'" class="absolute bottom-0 left-0 right-0 h-0.5 bg-brand rounded-full"></div>
+                        </button>
+                        <button v-if="faceEnabled" @click="profileTab = 'face'; resetProfileFace()"
+                            class="px-4 py-2 text-sm font-medium rounded-t-lg transition-colors relative"
+                            :class="profileTab === 'face' ? 'text-surface-100 bg-surface-800/50' : 'text-surface-400 hover:text-surface-300'">
+                            Face ID
+                            <div v-if="profileTab === 'face'" class="absolute bottom-0 left-0 right-0 h-0.5 bg-brand rounded-full"></div>
                         </button>
                     </div>
                     <!-- Profile Tab -->
@@ -1854,15 +1906,63 @@ onUnmounted(() => {
                                 class="w-full px-3.5 py-2.5 text-sm bg-surface-800/60 border border-surface-700/30 rounded-xl text-surface-100 placeholder-surface-500 focus:outline-none focus:border-brand/50 transition-colors" />
                         </div>
                     </div>
+                    <!-- Face ID Tab -->
+                    <div v-if="faceEnabled" v-show="profileTab === 'face'" class="px-6 py-5 overflow-y-auto flex-1 scrollbar-thin">
+                        <!-- Success message -->
+                        <div v-if="profileFaceSuccess" class="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-sm text-emerald-400 mb-4">
+                            Face registered successfully!
+                        </div>
+
+                        <!-- Error message -->
+                        <div v-if="profileFaceError" class="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-sm text-red-400 mb-4">
+                            {{ profileFaceError }}
+                        </div>
+
+                        <!-- Current status -->
+                        <div class="flex items-center gap-3 mb-5 p-3 rounded-xl bg-surface-800/40 border border-surface-700/30">
+                            <div class="w-10 h-10 rounded-xl flex items-center justify-center" :class="faceEnrolled ? 'bg-emerald-500/10' : 'bg-amber-500/10'">
+                                <svg v-if="faceEnrolled" class="w-5 h-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/></svg>
+                                <svg v-else class="w-5 h-5 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126Z"/></svg>
+                            </div>
+                            <div>
+                                <p class="text-sm font-medium" :class="faceEnrolled ? 'text-emerald-400' : 'text-amber-400'">
+                                    {{ faceEnrolled ? 'Face Registered' : 'Not Registered' }}
+                                </p>
+                                <p class="text-[10px] text-surface-500 mt-0.5">
+                                    {{ faceEnrolled ? 'You can update your face below' : 'Register your face to use punch in/out' }}
+                                </p>
+                            </div>
+                        </div>
+
+                        <!-- Idle state: show start button -->
+                        <div v-if="profileFaceStep === 'idle'">
+                            <button @click="startProfileFaceScan" class="w-full py-3 text-sm font-medium bg-brand hover:bg-brand-light text-surface-950 rounded-xl transition-colors flex items-center justify-center gap-2">
+                                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M7.5 3.75H6A2.25 2.25 0 0 0 3.75 6v1.5M16.5 3.75H18A2.25 2.25 0 0 1 20.25 6v1.5m0 9V18A2.25 2.25 0 0 1 18 20.25h-1.5m-9 0H6A2.25 2.25 0 0 1 3.75 18v-1.5"/></svg>
+                                {{ faceEnrolled ? 'Update Face ID' : 'Start Face Scan' }}
+                            </button>
+                        </div>
+
+                        <!-- Scanning -->
+                        <FaceScanCapture v-else-if="profileFaceStep === 'scanning'" @complete="onProfileFaceScanComplete" @cancel="onProfileFaceScanCancel" />
+
+                        <!-- Processing -->
+                        <div v-else-if="profileFaceStep === 'processing'" class="text-center py-8">
+                            <div class="w-14 h-14 rounded-full bg-brand/10 flex items-center justify-center mx-auto mb-4">
+                                <div class="w-7 h-7 border-2 border-brand/30 border-t-brand rounded-full animate-spin"></div>
+                            </div>
+                            <p class="text-sm font-medium text-surface-200 mb-1">Registering your face...</p>
+                            <p class="text-xs text-surface-500">This may take a moment</p>
+                        </div>
+                    </div>
                     <!-- Footer -->
                     <div class="px-6 py-4 border-t border-surface-800/50 flex items-center justify-end gap-3 flex-shrink-0">
-                        <button @click="showProfileModal = false" class="px-4 py-2 text-sm font-medium text-surface-400 hover:text-surface-200 transition-colors">Cancel</button>
+                        <button @click="resetProfileFace(); showProfileModal = false" class="px-4 py-2 text-sm font-medium text-surface-400 hover:text-surface-200 transition-colors">Cancel</button>
                         <button v-if="profileTab === 'profile'" @click="saveProfile" :disabled="savingProfile || !profileForm.name.trim()"
                             class="px-5 py-2 text-sm font-medium bg-brand hover:bg-brand-light disabled:opacity-40 text-surface-950 rounded-xl transition-colors flex items-center gap-2">
                             <div v-if="savingProfile" class="w-3.5 h-3.5 border-2 border-surface-950/30 border-t-surface-950 rounded-full animate-spin"></div>
                             Save Profile
                         </button>
-                        <button v-else @click="savePassword" :disabled="savingPassword || !passwordForm.current_password || !passwordForm.password || !passwordForm.password_confirmation"
+                        <button v-else-if="profileTab === 'password'" @click="savePassword" :disabled="savingPassword || !passwordForm.current_password || !passwordForm.password || !passwordForm.password_confirmation"
                             class="px-5 py-2 text-sm font-medium bg-brand hover:bg-brand-light disabled:opacity-40 text-surface-950 rounded-xl transition-colors flex items-center gap-2">
                             <div v-if="savingPassword" class="w-3.5 h-3.5 border-2 border-surface-950/30 border-t-surface-950 rounded-full animate-spin"></div>
                             Update Password

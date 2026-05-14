@@ -373,6 +373,7 @@ function closeMemberProfile() {
     viewMember.value = null;
     memberAttendance.value = null;
     dayEditOpen.value = null;
+    showEnrollmentHistory.value = false;
 }
 
 async function fetchMemberAttendance() {
@@ -471,7 +472,9 @@ function stopVideoPoll() {
     }
 }
 
-const enrollmentVideo = computed(() => memberFaceVideos.value.find(v => v.type === 'enrollment'));
+const enrollmentVideos = computed(() => memberFaceVideos.value.filter(v => v.type === 'enrollment').sort((a, b) => new Date(b.created_at) - new Date(a.created_at)));
+const enrollmentVideo = computed(() => enrollmentVideos.value[0]);
+const showEnrollmentHistory = ref(false);
 
 function openVideoModal(videoId) {
     faceVideoModalUrl.value = `/api/face/video/${videoId}`;
@@ -1456,17 +1459,46 @@ onUnmounted(() => {
                                         </button>
                                     </div>
 
-                                    <!-- Enrollment video -->
-                                    <div v-if="faceEnabled" class="px-3 sm:px-4 py-2 border-b border-surface-700/30 bg-surface-800/20 flex items-center justify-between">
-                                        <span class="text-[10px] text-surface-400">Face Enrollment</span>
-                                        <button v-if="enrollmentVideo" @click="openVideoModal(enrollmentVideo.id)" class="inline-flex items-center gap-1.5 text-[10px] text-brand hover:text-brand/80 transition-colors font-medium">
-                                            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z"/></svg>
-                                            Watch Enrollment Video
-                                        </button>
-                                        <span v-else class="inline-flex items-center gap-1.5 text-[10px] text-surface-500">
-                                            <div class="w-3 h-3 border-[1.5px] border-surface-600 border-t-surface-400 rounded-full animate-spin"></div>
-                                            Uploading...
-                                        </span>
+                                    <!-- Face ID Enrollment History -->
+                                    <div v-if="faceEnabled" class="border-b border-surface-700/30 bg-surface-800/20">
+                                        <div class="px-3 sm:px-4 py-2 flex items-center justify-between">
+                                            <div class="flex items-center gap-2">
+                                                <svg class="w-3.5 h-3.5 text-surface-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M7.5 3.75H6A2.25 2.25 0 0 0 3.75 6v1.5M16.5 3.75H18A2.25 2.25 0 0 1 20.25 6v1.5m0 9V18A2.25 2.25 0 0 1 18 20.25h-1.5m-9 0H6A2.25 2.25 0 0 1 3.75 18v-1.5"/></svg>
+                                                <span class="text-[10px] text-surface-400 font-medium">Face ID</span>
+                                                <span v-if="enrollmentVideos.length > 1" class="text-[9px] px-1.5 py-0.5 rounded-full bg-surface-700/50 text-surface-400">{{ enrollmentVideos.length }} registrations</span>
+                                            </div>
+                                            <div class="flex items-center gap-2">
+                                                <button v-if="enrollmentVideo" @click="openVideoModal(enrollmentVideo.id)" class="inline-flex items-center gap-1 text-[10px] text-brand hover:text-brand/80 transition-colors font-medium">
+                                                    <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z"/></svg>
+                                                    Current
+                                                </button>
+                                                <span v-else class="text-[10px] text-surface-600 italic">No video</span>
+                                                <button v-if="enrollmentVideos.length > 1" @click="showEnrollmentHistory = !showEnrollmentHistory" class="text-[10px] text-surface-500 hover:text-surface-300 transition-colors flex items-center gap-0.5">
+                                                    <svg class="w-3 h-3 transition-transform" :class="showEnrollmentHistory ? 'rotate-180' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5"/></svg>
+                                                    History
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <!-- Enrollment history expanded -->
+                                        <div v-if="showEnrollmentHistory && enrollmentVideos.length > 1" class="px-3 sm:px-4 pb-2.5">
+                                            <div class="space-y-1.5 max-h-40 overflow-y-auto scrollbar-thin">
+                                                <div v-for="(ev, idx) in enrollmentVideos" :key="ev.id"
+                                                    class="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-surface-800/40 border border-surface-700/20">
+                                                    <div class="flex items-center gap-2 min-w-0">
+                                                        <span class="text-[9px] px-1.5 py-0.5 rounded font-medium"
+                                                            :class="idx === 0 ? 'bg-brand/15 text-brand' : 'bg-surface-700/50 text-surface-500'">
+                                                            {{ idx === 0 ? 'Current' : (idx === enrollmentVideos.length - 1 ? 'Initial' : 'Update') }}
+                                                        </span>
+                                                        <span class="text-[10px] text-surface-400">{{ new Date(ev.created_at).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }) }}</span>
+                                                        <span class="text-[9px] text-surface-600">{{ new Date(ev.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}</span>
+                                                    </div>
+                                                    <button @click="openVideoModal(ev.id)" class="text-[10px] text-brand hover:text-brand/80 transition-colors flex items-center gap-1">
+                                                        <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z"/></svg>
+                                                        Watch
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
                                     </div>
 
                                     <!-- Loading -->
@@ -1670,7 +1702,7 @@ onUnmounted(() => {
                     <div v-if="faceVideoModalUrl" class="fixed inset-0 z-[110] flex items-center justify-center bg-black/80 backdrop-blur-md" @click.self="closeVideoModal">
                         <div class="bg-surface-900 border border-surface-700/50 rounded-2xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden">
                             <div class="px-5 py-3 border-b border-surface-800/50 flex items-center justify-between">
-                                <h3 class="text-sm font-semibold text-surface-200">Face Enrollment Recording</h3>
+                                <h3 class="text-sm font-semibold text-surface-200">Face ID Registration Recording</h3>
                                 <button @click="closeVideoModal" class="text-surface-500 hover:text-surface-300 transition-colors">
                                     <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12"/></svg>
                                 </button>

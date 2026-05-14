@@ -62,6 +62,7 @@ class TenantAdminController extends Controller
                     'punched_in_at' => $activeShift?->login_time?->toIso8601String(),
                     'today_hours' => round($todayHours, 2),
                     'joined' => $bidder->created_at?->toIso8601String(),
+                    'face_enrolled_at' => $bidder->face_enrolled_at,
                 ];
             });
 

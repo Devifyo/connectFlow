@@ -2,11 +2,13 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\FaceLoginAttempt;
 use App\Models\FaceVideo;
 use App\Models\Tenant;
 use App\Models\User;
 use App\Services\DeepStackService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Storage;
 
 class FaceRecognitionController extends Controller
@@ -218,6 +220,157 @@ class FaceRecognitionController extends Controller
 
         return response()->file($path, [
             'Content-Type' => 'video/webm',
+        ]);
+    }
+
+    public function faceLogin(Request $request, DeepStackService $deepstack)
+    {
+        $request->validate([
+            'frames' => 'required|array|min:3|max:5',
+            'frames.*.image' => 'required|string|max:5000000',
+            'frames.*.key' => 'required|string|in:center,left,right,up,down',
+        ]);
+
+        $ip = $request->ip();
+        $ua = $request->userAgent();
+        $loginConfidence = (float) config('deepstack.min_confidence', 0.65);
+
+        $recentFails = FaceLoginAttempt::where('ip_address', $ip)
+            ->where('success', false)
+            ->where('created_at', '>=', now()->subMinutes(15))
+            ->count();
+
+        if ($recentFails >= 5) {
+            return response()->json([
+                'error' => 'Too many failed attempts. Please try again later or use email and password.',
+            ], 429);
+        }
+
+        $centerFrame = collect($request->frames)->firstWhere('key', 'center');
+        if (!$centerFrame) {
+            return response()->json(['error' => 'Center frame is required.'], 422);
+        }
+
+        $result = $deepstack->recognizeFace($centerFrame['image']);
+
+        if (!$result['success']) {
+            FaceLoginAttempt::create([
+                'ip_address' => $ip,
+                'user_agent' => $ua,
+                'success' => false,
+                'failure_reason' => 'service_unavailable',
+            ]);
+            return response()->json(['error' => 'Face recognition service is temporarily unavailable.'], 503);
+        }
+
+        $bestMatch = null;
+        foreach ($result['predictions'] ?? [] as $prediction) {
+            if ($prediction['confidence'] >= $loginConfidence) {
+                if (!$bestMatch || $prediction['confidence'] > $bestMatch['confidence']) {
+                    $bestMatch = $prediction;
+                }
+            }
+        }
+
+        if (!$bestMatch) {
+            FaceLoginAttempt::create([
+                'ip_address' => $ip,
+                'user_agent' => $ua,
+                'success' => false,
+                'failure_reason' => 'no_match',
+                'confidence' => $result['predictions'][0]['confidence'] ?? null,
+            ]);
+            return response()->json(['error' => 'Face not recognized. Please try again or use email and password.'], 401);
+        }
+
+        $matchedTag = $bestMatch['userid'];
+        if (!preg_match('/^tenant_(\d+)_user_(\d+)$/', $matchedTag, $m)) {
+            FaceLoginAttempt::create([
+                'ip_address' => $ip,
+                'user_agent' => $ua,
+                'success' => false,
+                'failure_reason' => 'invalid_tag_format',
+                'matched_user_id_tag' => $matchedTag,
+            ]);
+            return response()->json(['error' => 'Face not recognized.'], 401);
+        }
+
+        $tenantId = (int) $m[1];
+        $userId = (int) $m[2];
+
+        $user = User::where('id', $userId)
+            ->where('tenant_id', $tenantId)
+            ->whereNotNull('face_enrolled_at')
+            ->where('is_active', true)
+            ->first();
+
+        if (!$user) {
+            FaceLoginAttempt::create([
+                'ip_address' => $ip,
+                'user_agent' => $ua,
+                'success' => false,
+                'failure_reason' => 'user_not_found_or_inactive',
+                'matched_user_id_tag' => $matchedTag,
+            ]);
+            return response()->json(['error' => 'Face not recognized.'], 401);
+        }
+
+        $tenant = Tenant::find($tenantId);
+        if (!$tenant?->face_recognition_enabled) {
+            FaceLoginAttempt::create([
+                'user_id' => $user->id,
+                'ip_address' => $ip,
+                'user_agent' => $ua,
+                'success' => false,
+                'failure_reason' => 'face_login_disabled',
+                'matched_user_id_tag' => $matchedTag,
+            ]);
+            return response()->json(['error' => 'Face login is not enabled for your organization.'], 403);
+        }
+
+        $verifiedCount = 0;
+        $expectedTag = "tenant_{$tenantId}_user_{$userId}";
+
+        foreach ($request->frames as $frame) {
+            $frameResult = $deepstack->recognizeFace($frame['image']);
+            if (!$frameResult['success']) continue;
+
+            foreach ($frameResult['predictions'] ?? [] as $p) {
+                if ($p['userid'] === $expectedTag && $p['confidence'] >= $loginConfidence) {
+                    $verifiedCount++;
+                    break;
+                }
+            }
+        }
+
+        if ($verifiedCount < 3) {
+            FaceLoginAttempt::create([
+                'user_id' => $user->id,
+                'ip_address' => $ip,
+                'user_agent' => $ua,
+                'success' => false,
+                'failure_reason' => "multi_frame_failed:{$verifiedCount}/" . count($request->frames),
+                'matched_user_id_tag' => $matchedTag,
+                'confidence' => $bestMatch['confidence'],
+            ]);
+            return response()->json(['error' => 'Verification failed. Please ensure your face is clearly visible from all angles.'], 401);
+        }
+
+        FaceLoginAttempt::create([
+            'user_id' => $user->id,
+            'ip_address' => $ip,
+            'user_agent' => $ua,
+            'success' => true,
+            'matched_user_id_tag' => $matchedTag,
+            'confidence' => $bestMatch['confidence'],
+        ]);
+
+        Auth::login($user);
+        $request->session()->regenerate();
+
+        return response()->json([
+            'success' => true,
+            'redirect' => route('dashboard'),
         ]);
     }
 }

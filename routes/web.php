@@ -28,6 +28,10 @@ Route::get('/dashboard', function () {
     return Inertia::render('BidderDashboard');
 })->middleware(['auth', 'verified'])->name('dashboard');
 
+// Face ID Login (unauthenticated, rate-limited)
+Route::post('/api/face/login', [\App\Http\Controllers\FaceRecognitionController::class, 'faceLogin'])
+    ->middleware(['throttle:10,1']);
+
 Route::middleware('auth')->group(function () {
     Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');
     Route::patch('/profile', [ProfileController::class, 'update'])->name('profile.update');
