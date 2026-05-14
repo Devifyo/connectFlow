@@ -42,10 +42,9 @@ async function onFaceScanComplete(result) {
     faceProcessing.value = true;
     faceError.value = '';
 
-    const frames = (result.frames || []).map(f => ({
-        image: f.image,
-        key: f.key,
-    }));
+    const frames = (result.frames || [])
+        .filter(f => f.key !== 'blink')
+        .map(f => ({ image: f.image, key: f.key }));
 
     if (frames.length < 3) {
         faceError.value = 'Insufficient scan data. Please try again.';
@@ -247,5 +246,5 @@ function onFaceScanCancel() {
     </div>
 
     <!-- Face Scan (fullscreen via Teleport inside FaceScanCapture) -->
-    <FaceScanCapture v-if="faceScanning" autostart @complete="onFaceScanComplete" @cancel="onFaceScanCancel" />
+    <FaceScanCapture v-if="faceScanning" autostart liveness @complete="onFaceScanComplete" @cancel="onFaceScanCancel" />
 </template>

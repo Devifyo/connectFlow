@@ -29,8 +29,12 @@ async function getSharedLandmarker() {
 export function useFaceMesh() {
     const yaw = ref(0);
     const pitch = ref(0);
+    const eyeOpen = ref(true);
+    const blinkCount = ref(0);
     const faceDetected = ref(false);
     const ready = ref(false);
+
+    let wasEyeClosed = false;
 
     let landmarker = null;
     let animFrame = null;
@@ -68,10 +72,24 @@ export function useFaceMesh() {
                 const faceMidY = (forehead.y + chin.y) / 2;
                 const faceHeight = Math.abs(chin.y - forehead.y) || 0.001;
                 pitch.value = ((noseTip.y - faceMidY) / faceHeight) * 100;
+
+                const leftEAR = earForEye(lm, [159, 145], [33, 133]);
+                const rightEAR = earForEye(lm, [386, 374], [263, 362]);
+                const avgEAR = (leftEAR + rightEAR) / 2;
+                const closed = avgEAR < 0.15;
+                eyeOpen.value = !closed;
+
+                if (closed && !wasEyeClosed) {
+                    wasEyeClosed = true;
+                } else if (!closed && wasEyeClosed) {
+                    wasEyeClosed = false;
+                    blinkCount.value++;
+                }
             } else {
                 faceDetected.value = false;
                 yaw.value = 0;
                 pitch.value = 0;
+                eyeOpen.value = true;
             }
         } catch {
             faceDetected.value = false;
@@ -105,5 +123,15 @@ export function useFaceMesh() {
         stopTracking();
     });
 
-    return { yaw, pitch, faceDetected, ready, init, startTracking, stopTracking, destroy };
+    function earForEye(lm, [topIdx, bottomIdx], [outerIdx, innerIdx]) {
+        const vertical = Math.abs(lm[topIdx].y - lm[bottomIdx].y);
+        const horizontal = Math.abs(lm[innerIdx].x - lm[outerIdx].x) || 0.001;
+        return vertical / horizontal;
+    }
+
+    function resetBlinks() {
+        blinkCount.value = 0;
+    }
+
+    return { yaw, pitch, eyeOpen, blinkCount, faceDetected, ready, init, startTracking, stopTracking, resetBlinks, destroy };
 }

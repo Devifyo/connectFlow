@@ -5,20 +5,29 @@ import { useFaceMesh } from '@/composables/useFaceMesh';
 
 const props = defineProps({
     autostart: { type: Boolean, default: false },
+    liveness: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(['complete', 'cancel']);
 
 const { videoRef, isStreaming, error: cameraError, startCamera, stopCamera, captureFrame, startRecording, stopRecording } = useWebcam();
-const { yaw, pitch, faceDetected, ready: meshReady, init: initMesh, startTracking, stopTracking, destroy: destroyMesh } = useFaceMesh();
+const { yaw, pitch, eyeOpen, blinkCount, faceDetected, ready: meshReady, init: initMesh, startTracking, stopTracking, resetBlinks, destroy: destroyMesh } = useFaceMesh();
 
-const scanPhases = [
+const headPhases = [
     { key: 'center', label: 'Look straight ahead',         short: 'Front',  yawMin: -8,  yawMax: 8,   pitchMin: -8,  pitchMax: 8 },
     { key: 'left',   label: 'Slowly turn left',            short: 'Left',   yawMin: 15,  yawMax: 90,  pitchMin: -15, pitchMax: 15 },
     { key: 'right',  label: 'Slowly turn right',           short: 'Right',  yawMin: -90, yawMax: -15, pitchMin: -15, pitchMax: 15 },
     { key: 'up',     label: 'Tilt up slightly',            short: 'Up',     yawMin: -15, yawMax: 15,  pitchMin: -50, pitchMax: -10 },
     { key: 'down',   label: 'Tilt down slightly',          short: 'Down',   yawMin: -15, yawMax: 15,  pitchMin: 10,  pitchMax: 50 },
 ];
+
+const blinkPhase = { key: 'blink', label: 'Blink your eyes twice', short: 'Blink', type: 'blink', requiredBlinks: 2 };
+
+const scanPhases = computed(() => {
+    const phases = [...headPhases];
+    if (props.liveness) phases.push(blinkPhase);
+    return phases;
+});
 
 const phase = ref(-1);
 const phaseProgress = ref(0);
@@ -33,14 +42,15 @@ const CENTER_DURATION = 2000;
 const MOVE_FILL_DURATION = 1800;
 const TICK = 100;
 const DECAY_RATE = 2;
+const blinkStartCount = ref(0);
 
 const totalProgress = computed(() => {
     if (phase.value < 0) return 0;
-    if (phase.value >= scanPhases.length) return 100;
-    return Math.round(((phase.value + phaseProgress.value / 100) / scanPhases.length) * 100);
+    if (phase.value >= scanPhases.value.length) return 100;
+    return Math.round(((phase.value + phaseProgress.value / 100) / scanPhases.value.length) * 100);
 });
 
-const currentPhase = computed(() => phase.value >= 0 && phase.value < scanPhases.length ? scanPhases[phase.value] : null);
+const currentPhase = computed(() => phase.value >= 0 && phase.value < scanPhases.value.length ? scanPhases.value[phase.value] : null);
 
 const CIRC = 2 * Math.PI * 120;
 const ringDash = computed(() => {
@@ -56,6 +66,9 @@ const phaseRingDash = computed(() => {
 const dotAngle = computed(() => ((totalProgress.value / 100) * 360 - 90) * (Math.PI / 180));
 
 function isPoseInRange(p) {
+    if (p.type === 'blink') {
+        return (blinkCount.value - blinkStartCount.value) >= p.requiredBlinks;
+    }
     return yaw.value >= p.yawMin && yaw.value <= p.yawMax &&
            pitch.value >= p.pitchMin && pitch.value <= p.pitchMax;
 }
@@ -82,7 +95,13 @@ function runPhase() {
     phaseProgress.value = 0;
     moveWarning.value = '';
 
-    const p = scanPhases[phase.value];
+    const p = scanPhases.value[phase.value];
+    const isBlink = p.type === 'blink';
+
+    if (isBlink) {
+        blinkStartCount.value = blinkCount.value;
+    }
+
     const isCenter = p.key === 'center';
     const progressPerTick = isCenter
         ? (100 / (CENTER_DURATION / TICK))
@@ -92,7 +111,16 @@ function runPhase() {
         if (!faceDetected.value) {
             moveWarning.value = 'Position your face in the frame';
             poseCorrect.value = false;
-            phaseProgress.value = Math.max(0, phaseProgress.value - DECAY_RATE);
+            if (!isBlink) phaseProgress.value = Math.max(0, phaseProgress.value - DECAY_RATE);
+            return;
+        }
+
+        if (isBlink) {
+            const blinked = blinkCount.value - blinkStartCount.value;
+            phaseProgress.value = Math.min(100, (blinked / p.requiredBlinks) * 100);
+            poseCorrect.value = blinked > 0;
+            moveWarning.value = blinked === 0 ? p.label : '';
+            if (phaseProgress.value >= 100) advancePhase();
             return;
         }
 
@@ -114,10 +142,10 @@ function runPhase() {
 function advancePhase() {
     clearTimers();
     const frame = captureFrame();
-    if (frame) capturedFrames.value.push({ key: scanPhases[phase.value].key, image: frame });
+    if (frame) capturedFrames.value.push({ key: scanPhases.value[phase.value].key, image: frame });
 
     phase.value++;
-    if (phase.value < scanPhases.length) {
+    if (phase.value < scanPhases.value.length) {
         runPhase();
     } else {
         phaseProgress.value = 100;
@@ -162,7 +190,7 @@ async function retry() {
     begin();
 }
 
-const showFullscreen = computed(() => scanning.value || phase.value >= scanPhases.length || (props.autostart && phase.value === -1));
+const showFullscreen = computed(() => scanning.value || phase.value >= scanPhases.value.length || (props.autostart && phase.value === -1));
 
 onMounted(() => {
     if (props.autostart) begin();
@@ -363,7 +391,8 @@ onUnmounted(() => {
                         <div class="bg-black/50 backdrop-blur-md rounded-xl px-4 py-2.5 border border-white/5 flex items-center gap-3">
                             <div class="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 transition-colors duration-300"
                                 :class="poseCorrect ? 'bg-emerald-500/20' : 'bg-white/5'">
-                                <svg v-if="currentPhase?.key === 'center'" class="w-5 h-5 transition-colors" :class="poseCorrect ? 'text-emerald-400' : 'text-white/70'" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path stroke-linecap="round" stroke-linejoin="round" d="M12 2v2m0 16v2M2 12h2m16 0h2"/></svg>
+                                <svg v-if="currentPhase?.type === 'blink'" class="w-5 h-5 transition-colors" :class="poseCorrect ? 'text-emerald-400' : 'text-cyan-400'" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178Z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/></svg>
+                                <svg v-else-if="currentPhase?.key === 'center'" class="w-5 h-5 transition-colors" :class="poseCorrect ? 'text-emerald-400' : 'text-white/70'" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path stroke-linecap="round" stroke-linejoin="round" d="M12 2v2m0 16v2M2 12h2m16 0h2"/></svg>
                                 <svg v-else-if="currentPhase?.key === 'left'" class="w-5 h-5 animate-nudge-left transition-colors" :class="poseCorrect ? 'text-emerald-400' : 'text-white/70'" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18"/></svg>
                                 <svg v-else-if="currentPhase?.key === 'right'" class="w-5 h-5 animate-nudge-right transition-colors" :class="poseCorrect ? 'text-emerald-400' : 'text-white/70'" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3"/></svg>
                                 <svg v-else-if="currentPhase?.key === 'up'" class="w-5 h-5 animate-nudge-up transition-colors" :class="poseCorrect ? 'text-emerald-400' : 'text-white/70'" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 10.5 12 3m0 0 7.5 7.5M12 3v18"/></svg>
@@ -373,7 +402,7 @@ onUnmounted(() => {
                                 <p class="text-xs font-semibold text-white/90 leading-tight">{{ currentPhase?.label }}</p>
                                 <p class="text-[9px] mt-0.5 transition-colors duration-300"
                                     :class="poseCorrect ? 'text-emerald-400' : 'text-white/40'">
-                                    {{ poseCorrect ? 'Hold steady...' : (faceDetected ? 'Move to position' : 'Face not visible') }}
+                                    {{ currentPhase?.type === 'blink' ? (poseCorrect ? `${blinkCount - blinkStartCount} of ${currentPhase.requiredBlinks} blinks` : 'Blink naturally') : (poseCorrect ? 'Hold steady...' : (faceDetected ? 'Move to position' : 'Face not visible')) }}
                                 </p>
                             </div>
                             <div class="w-9 h-9 flex-shrink-0">
