@@ -11,5 +11,6 @@ class Tenant extends Model
 
     protected $casts = [
         'agency_profile' => 'array',
+        'face_recognition_enabled' => 'boolean',
     ];
 }

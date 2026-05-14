@@ -41,6 +41,7 @@ class TimeLogController extends Controller
             'status' => 'success',
             'message' => 'Punched in.',
             'punched_in_at' => $log->login_time->toIso8601String(),
+            'log_id' => $log->log_id,
         ]);
     }
 
@@ -76,6 +77,7 @@ class TimeLogController extends Controller
             'status' => 'success',
             'message' => 'Punched out.',
             'total_hours' => round($totalHours, 2),
+            'log_id' => $log->log_id,
         ]);
     }
 

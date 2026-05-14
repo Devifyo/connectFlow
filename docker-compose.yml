@@ -116,8 +116,20 @@ services:
     depends_on:
       - db
 
+  deepstack:
+    image: deepquestai/deepstack:latest
+    container_name: connectflow_deepstack
+    restart: unless-stopped
+    environment:
+      - VISION-FACE=True
+    volumes:
+      - connectflow_deepstack_data:/datastore
+    networks:
+      - connectflow_default
+
 volumes:
   connectflow_db_data:
+  connectflow_deepstack_data:
 
 networks:
   connectflow_default:

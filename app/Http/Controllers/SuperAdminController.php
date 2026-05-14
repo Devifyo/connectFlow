@@ -30,6 +30,7 @@ class SuperAdminController extends Controller
                 'company_name' => $tenant->company_name,
                 'subscription_plan' => $tenant->subscription_plan,
                 'subscription_status' => $tenant->subscription_status,
+                'face_recognition_enabled' => (bool) $tenant->face_recognition_enabled,
                 'user_count' => $userCount,
                 'bidder_count' => $bidderCount,
                 'bid_count' => $bidCount,
@@ -62,5 +63,18 @@ class SuperAdminController extends Controller
         $tenant->update(['subscription_status' => $request->status]);
 
         return response()->json(['status' => 'success', 'tenant' => $tenant]);
+    }
+
+    public function toggleFaceRecognition(Request $request, $id)
+    {
+        $request->validate(['enabled' => 'required|boolean']);
+
+        $tenant = Tenant::findOrFail($id);
+        $tenant->update(['face_recognition_enabled' => $request->enabled]);
+
+        return response()->json([
+            'status' => 'success',
+            'face_recognition_enabled' => (bool) $tenant->face_recognition_enabled,
+        ]);
     }
 }

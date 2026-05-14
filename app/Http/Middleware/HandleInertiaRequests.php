@@ -35,6 +35,15 @@ class HandleInertiaRequests extends Middleware
             $impersonator = \App\Models\User::withoutGlobalScopes()->find($impersonatorId);
         }
 
+        $faceRecognition = null;
+        if ($request->user()) {
+            $tenant = \App\Models\Tenant::find($request->user()->tenant_id);
+            $faceRecognition = [
+                'enabled' => (bool) $tenant?->face_recognition_enabled,
+                'enrolled' => !is_null($request->user()->face_enrolled_at),
+            ];
+        }
+
         return [
             ...parent::share($request),
             'auth' => [
@@ -43,6 +52,7 @@ class HandleInertiaRequests extends Middleware
             'impersonating' => $impersonatorId ? [
                 'admin_name' => $impersonator?->name,
             ] : null,
+            'face_recognition' => $faceRecognition,
         ];
     }
 }

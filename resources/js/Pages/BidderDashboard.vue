@@ -11,8 +11,11 @@ import '@vuepic/vue-datepicker/dist/main.css';
 import { VueTelInput } from 'vue-tel-input';
 import 'vue-tel-input/vue-tel-input.css';
 import { vProtectedSrc } from '@/directives/protectedSrc';
+import FaceEnrollmentModal from '@/Components/FaceEnrollmentModal.vue';
+import { useWebcam } from '@/composables/useWebcam';
+import { useVideoUploader } from '@/composables/useVideoUploader';
 
-const props = defineProps(['auth', 'impersonating']);
+const props = defineProps(['auth', 'impersonating', 'face_recognition']);
 
 const { totalUnread, fetchUnreadCount, handleIncomingMessage, handleTypingEvent, handleReadEvent, handlePresenceEvent, togglePanel, startHeartbeat, openConversationByHash } = useMessaging();
 useTabBadge(totalUnread, 'Dashboard - PitchFlow');
@@ -37,6 +40,23 @@ const punchLocationError = ref('');
 const punchLocationDenied = ref(false);
 const punchLoading = ref(false);
 const punchLocating = ref(false);
+
+// Face recognition
+const faceEnabled = computed(() => props.face_recognition?.enabled === true);
+const faceEnrolled = ref(props.face_recognition?.enrolled === true);
+const showFaceEnrollment = computed(() => faceEnabled.value && !faceEnrolled.value);
+const punchStep = ref('location');
+const faceVerifying = ref(false);
+const faceError = ref('');
+const { videoRef: punchVideoRef, isStreaming: punchCamStreaming, error: punchCamError, startCamera: startPunchCam, stopCamera: stopPunchCam, captureFrame: capturePunchFrame, startRecording: startPunchRecording, stopRecording: stopPunchRecording } = useWebcam();
+const { queueUpload: queueVideoUpload } = useVideoUploader();
+
+function onFaceEnrolled() {
+    faceEnrolled.value = true;
+    router.reload({ only: ['face_recognition'] });
+}
+
+let pendingPunchVideoBlob = null;
 const punchMapRef = ref(null);
 
 const formattedElapsed = computed(() => {
@@ -78,10 +98,13 @@ async function fetchTimeStatus() {
 }
 
 function openPunchModal() {
+    if (faceEnabled.value && !faceEnrolled.value) return;
     punchLocation.value = null;
     punchLocationError.value = '';
     punchLocationDenied.value = false;
     punchLoading.value = false;
+    punchStep.value = 'location';
+    faceError.value = '';
     showPunchModal.value = true;
     requestLocation();
 }
@@ -147,29 +170,78 @@ function initPunchMap(lat, lng) {
 
 async function confirmPunch() {
     if (!punchLocation.value || punchLoading.value) return;
+
+    if (faceEnabled.value && faceEnrolled.value && punchStep.value === 'location') {
+        punchStep.value = 'face';
+        faceError.value = '';
+        await startPunchCam();
+        startPunchRecording();
+        return;
+    }
+
+    await executePunch();
+}
+
+async function verifyAndPunch() {
+    faceVerifying.value = true;
+    faceError.value = '';
+    try {
+        const image = capturePunchFrame();
+        if (!image) {
+            faceError.value = 'Could not capture image. Please try again.';
+            return;
+        }
+        const { data } = await axios.post('/api/face/verify', { image });
+        if (data.verified) {
+            pendingPunchVideoBlob = await stopPunchRecording();
+            stopPunchCam();
+            await executePunch();
+        } else {
+            faceError.value = data.error || 'Face not recognized. Please try again.';
+        }
+    } catch (e) {
+        faceError.value = e.response?.data?.error || 'Verification failed. Please try again.';
+    } finally {
+        faceVerifying.value = false;
+    }
+}
+
+async function executePunch() {
     punchLoading.value = true;
+    const wasPunchedIn = isPunchedIn.value;
     try {
         const payload = {
             latitude: punchLocation.value.lat,
             longitude: punchLocation.value.lng,
             address: punchLocation.value.address,
         };
-        if (isPunchedIn.value) {
-            await axios.post('/api/time/punch-out', payload);
+        if (wasPunchedIn) {
+            const { data } = await axios.post('/api/time/punch-out', payload);
             isPunchedIn.value = false;
             punchedInAt.value = null;
             stopClock();
             elapsedSeconds.value = 0;
             fetchTimeStatus();
+            if (pendingPunchVideoBlob) {
+                queueVideoUpload(pendingPunchVideoBlob, 'punch_out', data.log_id);
+                pendingPunchVideoBlob = null;
+            }
         } else {
             const { data } = await axios.post('/api/time/punch-in', payload);
             isPunchedIn.value = true;
             punchedInAt.value = data.punched_in_at || data.log?.login_time;
             startClock(punchedInAt.value);
+            if (pendingPunchVideoBlob) {
+                queueVideoUpload(pendingPunchVideoBlob, 'punch_in', data.log_id);
+                pendingPunchVideoBlob = null;
+            }
         }
+        stopPunchCam();
         showPunchModal.value = false;
     } catch (e) {
+        pendingPunchVideoBlob = null;
         punchLocationError.value = e.response?.data?.error || 'Something went wrong. Please try again.';
+        punchStep.value = 'location';
     } finally {
         punchLoading.value = false;
     }
@@ -1757,25 +1829,35 @@ onUnmounted(() => {
             </div>
         </Teleport>
 
+        <!-- Face Enrollment Modal (blocking) -->
+        <FaceEnrollmentModal v-if="showFaceEnrollment" @enrolled="onFaceEnrolled" />
+
         <!-- Punch In/Out Modal -->
         <Teleport to="body">
-            <div v-if="showPunchModal" class="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 backdrop-blur-sm" @click.self="showPunchModal = false">
+            <div v-if="showPunchModal" class="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 backdrop-blur-sm" @click.self="showPunchModal = false; stopPunchCam();">
                 <div class="bg-surface-900 border border-surface-700/50 rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
                     <!-- Header -->
                     <div class="px-6 py-4 border-b border-surface-800/50 flex items-center justify-between">
                         <div>
                             <h3 class="text-base font-semibold text-surface-100">{{ isPunchedIn ? 'Punch Out' : 'Punch In' }}</h3>
-                            <p class="text-xs text-surface-500 mt-0.5">Confirm your location to {{ isPunchedIn ? 'end' : 'start' }} your shift</p>
+                            <p class="text-xs text-surface-500 mt-0.5">
+                                {{ punchStep === 'face' ? 'Verify your identity' : `Confirm your location to ${isPunchedIn ? 'end' : 'start'} your shift` }}
+                            </p>
                         </div>
-                        <button @click="showPunchModal = false" class="text-surface-500 hover:text-surface-300 transition-colors">
+                        <!-- Step indicator when face is required -->
+                        <div v-if="faceEnabled && faceEnrolled" class="flex items-center gap-1.5 mr-3">
+                            <div class="w-2 h-2 rounded-full" :class="punchStep === 'location' ? 'bg-brand' : 'bg-brand/30'"></div>
+                            <div class="w-2 h-2 rounded-full" :class="punchStep === 'face' ? 'bg-brand' : 'bg-brand/30'"></div>
+                        </div>
+                        <button @click="showPunchModal = false; stopPunchCam();" class="text-surface-500 hover:text-surface-300 transition-colors">
                             <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                                 <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
                             </svg>
                         </button>
                     </div>
 
-                    <!-- Body -->
-                    <div class="px-6 py-5">
+                    <!-- Body: Location Step -->
+                    <div v-show="punchStep === 'location'" class="px-6 py-5">
                         <!-- Locating spinner -->
                         <div v-if="punchLocating" class="flex flex-col items-center gap-3 py-8">
                             <div class="w-10 h-10 border-3 border-surface-600 border-t-brand rounded-full animate-spin"></div>
@@ -1837,10 +1919,41 @@ onUnmounted(() => {
                         </div>
                     </div>
 
+                    <!-- Body: Face Verification Step -->
+                    <div v-if="punchStep === 'face'" class="px-6 py-5">
+                        <div v-if="punchCamError" class="text-center py-6">
+                            <div class="w-12 h-12 rounded-full bg-red-500/10 flex items-center justify-center mx-auto mb-3">
+                                <svg class="w-6 h-6 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
+                                </svg>
+                            </div>
+                            <p class="text-sm text-red-400 mb-3">{{ punchCamError }}</p>
+                            <button @click="startPunchCam" class="btn-secondary text-xs px-4 py-2">Try Again</button>
+                        </div>
+
+                        <div v-else>
+                            <div class="relative rounded-xl overflow-hidden bg-black mb-4">
+                                <video ref="punchVideoRef" class="w-full" autoplay playsinline muted></video>
+                                <div class="absolute inset-0 pointer-events-none">
+                                    <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-44 h-44 sm:w-52 sm:h-52 rounded-full border-2 border-brand/40"></div>
+                                </div>
+                                <div v-if="!punchCamStreaming" class="absolute inset-0 flex items-center justify-center bg-surface-900">
+                                    <div class="w-8 h-8 border-2 border-brand/30 border-t-brand rounded-full animate-spin"></div>
+                                </div>
+                            </div>
+                            <p class="text-xs text-surface-500 text-center mb-2">Look at the camera to verify your identity</p>
+                            <div v-if="faceError" class="p-2.5 rounded-lg bg-red-500/10 border border-red-500/20 mb-3">
+                                <p class="text-xs text-red-400 text-center">{{ faceError }}</p>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- Footer -->
                     <div class="px-6 py-4 border-t border-surface-800/50 flex items-center justify-end gap-3">
-                        <button @click="showPunchModal = false" class="btn-ghost text-xs px-4 py-2">Cancel</button>
-                        <button
+                        <button @click="showPunchModal = false; stopPunchCam();" class="btn-ghost text-xs px-4 py-2">Cancel</button>
+
+                        <!-- Location step button -->
+                        <button v-if="punchStep === 'location'"
                             @click="confirmPunch"
                             :disabled="!punchLocation || punchLoading"
                             class="px-5 py-2.5 rounded-xl text-xs font-semibold transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed"
@@ -1852,7 +1965,23 @@ onUnmounted(() => {
                                 <div class="w-3.5 h-3.5 border-2 border-current/30 border-t-current rounded-full animate-spin"></div>
                                 Processing...
                             </span>
-                            <span v-else>{{ isPunchedIn ? 'Confirm Punch Out' : 'Confirm Punch In' }}</span>
+                            <span v-else>{{ faceEnabled && faceEnrolled ? 'Next: Verify Face' : (isPunchedIn ? 'Confirm Punch Out' : 'Confirm Punch In') }}</span>
+                        </button>
+
+                        <!-- Face step button -->
+                        <button v-if="punchStep === 'face'"
+                            @click="verifyAndPunch"
+                            :disabled="!punchCamStreaming || faceVerifying"
+                            class="px-5 py-2.5 rounded-xl text-xs font-semibold transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed"
+                            :class="isPunchedIn
+                                ? 'bg-red-500 text-white hover:bg-red-600 active:scale-95'
+                                : 'bg-brand text-surface-950 hover:bg-brand-light active:scale-95'"
+                        >
+                            <span v-if="faceVerifying" class="flex items-center gap-2">
+                                <div class="w-3.5 h-3.5 border-2 border-current/30 border-t-current rounded-full animate-spin"></div>
+                                Verifying...
+                            </span>
+                            <span v-else>{{ isPunchedIn ? 'Verify & Punch Out' : 'Verify & Punch In' }}</span>
                         </button>
                     </div>
                 </div>

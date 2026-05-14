@@ -10,7 +10,7 @@ import axios from 'axios';
 import { VueDatePicker } from '@vuepic/vue-datepicker';
 import '@vuepic/vue-datepicker/dist/main.css';
 
-const props = defineProps(['auth']);
+const props = defineProps(['auth', 'face_recognition']);
 
 const { totalUnread, fetchUnreadCount, handleIncomingMessage, handleTypingEvent, handleReadEvent, handlePresenceEvent, togglePanel, startHeartbeat, openConversationByHash } = useMessaging();
 useTabBadge(totalUnread, 'Admin Dashboard - PitchFlow');
@@ -344,10 +344,12 @@ async function openMemberProfile(bidder) {
     attMonth.value = new Date().getMonth() + 1;
     bidReportFilter.value = 'month';
     bidReportDateRange.value = null;
-    await Promise.all([fetchMemberAttendance(), fetchMemberBidReport()]);
+    await Promise.all([fetchMemberAttendance(), fetchMemberBidReport(), fetchMemberFaceVideos()]);
+    if (faceEnabled.value) startVideoPoll();
 }
 
 function closeMemberProfile() {
+    stopVideoPoll();
     viewMember.value = null;
     memberAttendance.value = null;
     dayEditOpen.value = null;
@@ -368,6 +370,75 @@ function changeAttMonth(dir) {
     if (attMonth.value > 12) { attMonth.value = 1; attYear.value++; }
     if (attMonth.value < 1) { attMonth.value = 12; attYear.value--; }
     fetchMemberAttendance();
+}
+
+const memberFaceVideos = ref([]);
+const faceVideoModalUrl = ref(null);
+let videoPollInterval = null;
+
+const faceEnabled = computed(() => props.face_recognition?.enabled === true);
+
+async function fetchMemberFaceVideos() {
+    if (!viewMember.value) return;
+    try {
+        const { data } = await axios.get(`/api/admin/bidders/${viewMember.value.id}/face-videos`);
+        memberFaceVideos.value = data.videos;
+    } catch (e) { memberFaceVideos.value = []; }
+}
+
+function getSessionVideos(session) {
+    const noFace = { punch_in: null, punch_out: null, punch_in_pending: false, punch_out_pending: false };
+    if (!session.log_id) return noFace;
+    if (!faceEnabled.value) return noFace;
+
+    const pin = memberFaceVideos.value.find(v => v.type === 'punch_in' && v.time_log_id === session.log_id);
+    const pout = memberFaceVideos.value.find(v => v.type === 'punch_out' && v.time_log_id === session.log_id);
+
+    return {
+        punch_in: pin || null,
+        punch_out: pout || null,
+        punch_in_pending: !pin && !!session.in,
+        punch_out_pending: !pout && !!session.out,
+    };
+}
+
+const hasPendingVideos = computed(() => {
+    if (!faceEnabled.value || !memberAttendance.value) return false;
+    for (const day of memberAttendance.value.days) {
+        for (const s of day.sessions || []) {
+            if (!s.log_id) continue;
+            const v = getSessionVideos(s);
+            if (v.punch_in_pending || v.punch_out_pending) return true;
+        }
+    }
+    return false;
+});
+
+function startVideoPoll() {
+    stopVideoPoll();
+    videoPollInterval = setInterval(() => {
+        if (hasPendingVideos.value && viewMember.value) {
+            fetchMemberFaceVideos();
+        } else {
+            stopVideoPoll();
+        }
+    }, 10000);
+}
+
+function stopVideoPoll() {
+    if (videoPollInterval) {
+        clearInterval(videoPollInterval);
+        videoPollInterval = null;
+    }
+}
+
+const enrollmentVideo = computed(() => memberFaceVideos.value.find(v => v.type === 'enrollment'));
+
+function openVideoModal(videoId) {
+    faceVideoModalUrl.value = `/api/face/video/${videoId}`;
+}
+function closeVideoModal() {
+    faceVideoModalUrl.value = null;
 }
 
 const selectedDaySessions = computed(() => {
@@ -703,6 +774,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+    stopVideoPoll();
     if (props.auth.user?.id && window.Echo) {
         window.Echo.leaveChannel(`private-messages.${props.auth.user.id}`);
     }
@@ -1345,6 +1417,19 @@ onUnmounted(() => {
                                         </button>
                                     </div>
 
+                                    <!-- Enrollment video -->
+                                    <div v-if="faceEnabled" class="px-3 sm:px-4 py-2 border-b border-surface-700/30 bg-surface-800/20 flex items-center justify-between">
+                                        <span class="text-[10px] text-surface-400">Face Enrollment</span>
+                                        <button v-if="enrollmentVideo" @click="openVideoModal(enrollmentVideo.id)" class="inline-flex items-center gap-1.5 text-[10px] text-brand hover:text-brand/80 transition-colors font-medium">
+                                            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z"/></svg>
+                                            Watch Enrollment Video
+                                        </button>
+                                        <span v-else class="inline-flex items-center gap-1.5 text-[10px] text-surface-500">
+                                            <div class="w-3 h-3 border-[1.5px] border-surface-600 border-t-surface-400 rounded-full animate-spin"></div>
+                                            Uploading...
+                                        </span>
+                                    </div>
+
                                     <!-- Loading -->
                                     <div v-if="memberAttLoading" class="flex items-center justify-center py-12">
                                         <div class="w-6 h-6 border-2 border-brand/30 border-t-brand rounded-full animate-spin"></div>
@@ -1474,8 +1559,20 @@ onUnmounted(() => {
                                                         <div class="flex flex-wrap items-center gap-2 sm:gap-3 text-xs">
                                                             <span class="text-surface-500 w-3">{{ si + 1 }}.</span>
                                                             <span class="font-mono text-emerald-400">{{ s.in ? new Date(s.in).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--' }}</span>
+                                                            <button v-if="getSessionVideos(s).punch_in" @click="openVideoModal(getSessionVideos(s).punch_in.id)" class="p-0.5 rounded text-emerald-400/60 hover:text-emerald-400 transition-colors" title="Watch punch-in video">
+                                                                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z"/></svg>
+                                                            </button>
+                                                            <span v-else-if="getSessionVideos(s).punch_in_pending" class="p-0.5" title="Video uploading...">
+                                                                <div class="w-3.5 h-3.5 border-[1.5px] border-emerald-400/20 border-t-emerald-400/60 rounded-full animate-spin"></div>
+                                                            </span>
                                                             <svg class="w-3 h-3 text-surface-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>
                                                             <span class="font-mono" :class="s.out ? 'text-red-400' : 'text-emerald-400'">{{ s.out ? new Date(s.out).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Active' }}</span>
+                                                            <button v-if="getSessionVideos(s).punch_out" @click="openVideoModal(getSessionVideos(s).punch_out.id)" class="p-0.5 rounded text-red-400/60 hover:text-red-400 transition-colors" title="Watch punch-out video">
+                                                                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z"/></svg>
+                                                            </button>
+                                                            <span v-else-if="getSessionVideos(s).punch_out_pending" class="p-0.5" title="Video uploading...">
+                                                                <div class="w-3.5 h-3.5 border-[1.5px] border-red-400/20 border-t-red-400/60 rounded-full animate-spin"></div>
+                                                            </span>
                                                             <span class="text-surface-500 ml-auto">{{ formatHours(s.hours) }}</span>
                                                         </div>
                                                         <!-- Punch In Location -->
@@ -1512,6 +1609,23 @@ onUnmounted(() => {
                                     </div>
                                 </div>
                                 </div>
+                            </div>
+                        </div>
+                    </div>
+                </Teleport>
+
+                <!-- Face Video Player Modal -->
+                <Teleport to="body">
+                    <div v-if="faceVideoModalUrl" class="fixed inset-0 z-[110] flex items-center justify-center bg-black/80 backdrop-blur-md" @click.self="closeVideoModal">
+                        <div class="bg-surface-900 border border-surface-700/50 rounded-2xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden">
+                            <div class="px-5 py-3 border-b border-surface-800/50 flex items-center justify-between">
+                                <h3 class="text-sm font-semibold text-surface-200">Face Verification Recording</h3>
+                                <button @click="closeVideoModal" class="text-surface-500 hover:text-surface-300 transition-colors">
+                                    <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12"/></svg>
+                                </button>
+                            </div>
+                            <div class="p-4">
+                                <video :src="faceVideoModalUrl" controls autoplay class="w-full rounded-xl bg-black"></video>
                             </div>
                         </div>
                     </div>

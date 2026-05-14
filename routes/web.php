@@ -53,6 +53,7 @@ Route::middleware('auth')->group(function () {
         Route::get('/api/admin/bidders/{id}/profile', [\App\Http\Controllers\TenantAdminController::class, 'memberProfile']);
         Route::get('/api/admin/bidders/{id}/bid-report', [\App\Http\Controllers\TenantAdminController::class, 'memberBidReport']);
         Route::get('/api/admin/bidders/{id}/attendance', [\App\Http\Controllers\TenantAdminController::class, 'memberAttendance']);
+        Route::get('/api/admin/bidders/{id}/face-videos', [\App\Http\Controllers\FaceRecognitionController::class, 'memberVideos']);
         Route::put('/api/admin/bidders/{id}/attendance', [\App\Http\Controllers\TenantAdminController::class, 'updateDayStatus']);
         Route::delete('/api/admin/bidders/{id}/attendance', [\App\Http\Controllers\TenantAdminController::class, 'removeDayOverride']);
         Route::post('/api/admin/impersonate/{id}', [\App\Http\Controllers\TenantAdminController::class, 'impersonate']);
@@ -102,6 +103,14 @@ Route::middleware('auth')->group(function () {
     Route::post('/api/profile/password', [ProfileController::class, 'updatePassword']);
     Route::post('/api/profile/basic', [ProfileController::class, 'updateBasic']);
 
+    // Face Recognition
+    Route::get('/api/face/status', [\App\Http\Controllers\FaceRecognitionController::class, 'status']);
+    Route::post('/api/face/enroll', [\App\Http\Controllers\FaceRecognitionController::class, 'enroll']);
+    Route::post('/api/face/verify', [\App\Http\Controllers\FaceRecognitionController::class, 'verify']);
+    Route::post('/api/face/upload-video', [\App\Http\Controllers\FaceRecognitionController::class, 'uploadVideo']);
+    Route::post('/api/face/upload-video-chunk', [\App\Http\Controllers\FaceRecognitionController::class, 'uploadVideoChunk']);
+    Route::get('/api/face/video/{id}', [\App\Http\Controllers\FaceRecognitionController::class, 'streamVideo']);
+
     // Presence heartbeat
     Route::post('/api/heartbeat', [\App\Http\Controllers\MessageController::class, 'heartbeat']);
     Route::post('/api/go-offline', [\App\Http\Controllers\MessageController::class, 'goOffline']);
@@ -110,6 +119,7 @@ Route::middleware('auth')->group(function () {
     Route::middleware('role:SuperAdmin')->group(function () {
         Route::get('/api/super/tenants', [\App\Http\Controllers\SuperAdminController::class, 'tenants']);
         Route::put('/api/super/tenants/{id}/status', [\App\Http\Controllers\SuperAdminController::class, 'updateStatus']);
+        Route::put('/api/super/tenants/{id}/face-recognition', [\App\Http\Controllers\SuperAdminController::class, 'toggleFaceRecognition']);
     });
 });
 

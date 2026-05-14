@@ -34,6 +34,14 @@ async function updateTenantStatus(tenantId, status) {
     } catch (e) {}
 }
 
+async function toggleFaceRecognition(tenant) {
+    const newVal = !tenant.face_recognition_enabled;
+    try {
+        await axios.put(`/api/super/tenants/${tenant.tenant_id}/face-recognition`, { enabled: newVal });
+        tenant.face_recognition_enabled = newVal;
+    } catch (e) {}
+}
+
 function toLocalDate(iso) {
     if (!iso) return '';
     return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
@@ -176,6 +184,7 @@ onUnmounted(() => {
                                 <th class="px-6 py-3 text-center table-header">Users</th>
                                 <th class="px-6 py-3 text-center table-header">Bidders</th>
                                 <th class="px-6 py-3 text-center table-header">Bids</th>
+                                <th class="px-6 py-3 text-center table-header">Face ID</th>
                                 <th class="px-6 py-3 text-left table-header">Created</th>
                                 <th class="px-6 py-3 text-right table-header">Actions</th>
                             </tr>
@@ -205,6 +214,14 @@ onUnmounted(() => {
                                 <td class="px-6 py-4 text-center font-mono text-surface-300">{{ tenant.user_count }}</td>
                                 <td class="px-6 py-4 text-center font-mono text-surface-300">{{ tenant.bidder_count }}</td>
                                 <td class="px-6 py-4 text-center font-mono text-surface-300">{{ tenant.bid_count }}</td>
+                                <td class="px-6 py-4 text-center">
+                                    <button @click="toggleFaceRecognition(tenant)"
+                                        class="relative inline-flex h-5 w-9 items-center rounded-full transition-colors duration-200"
+                                        :class="tenant.face_recognition_enabled ? 'bg-brand' : 'bg-surface-700'">
+                                        <span class="inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform duration-200"
+                                            :class="tenant.face_recognition_enabled ? 'translate-x-4' : 'translate-x-1'"></span>
+                                    </button>
+                                </td>
                                 <td class="px-6 py-4 text-xs text-surface-500">{{ toLocalDate(tenant.created_at) }}</td>
                                 <td class="px-6 py-4 text-right relative">
                                     <div class="flex items-center justify-end gap-1">
