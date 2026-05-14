@@ -777,7 +777,7 @@ onUnmounted(() => {
                 </div>
                 <div class="stat-card">
                     <span class="text-xs font-medium text-surface-400 uppercase tracking-wider">Hours Today</span>
-                    <span class="text-xl font-semibold text-surface-100 mt-1 font-mono">{{ Math.abs(todayHours).toFixed(1) }}h</span>
+                    <span class="text-xl font-semibold text-surface-100 mt-1 font-mono">{{ formatHours(todayHours) }}</span>
                 </div>
             </div>
 

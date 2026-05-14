@@ -287,6 +287,16 @@ const dayEditOpen = ref(null);
 const dayEditForm = ref({ status: 'present', manual_hours: '', note: '', show_status_to_member: false, show_note_to_member: false });
 const dayEditLoading = ref(false);
 
+function formatHours(h) {
+    if (!h || h === 0) return '0h 0m';
+    const val = Math.abs(h);
+    const hours = Math.floor(val);
+    const mins = Math.round((val - hours) * 60);
+    if (hours === 0) return `${mins}m`;
+    if (mins === 0) return `${hours}h`;
+    return `${hours}h ${mins}m`;
+}
+
 const statusLabels = { present: 'Present', absent: 'Absent', week_off: 'Week Off', half_day: 'Half Day', weekend: 'Weekend', future: 'Future', na: 'N/A' };
 const statusDotColors = { present: 'bg-emerald-400', absent: 'bg-red-400', week_off: 'bg-violet-400', half_day: 'bg-amber-400', weekend: 'bg-surface-600', future: 'bg-surface-700', na: 'bg-surface-700' };
 
@@ -1356,11 +1366,11 @@ onUnmounted(() => {
                                                 <p class="text-[10px] text-surface-500">Absent</p>
                                             </div>
                                             <div class="text-center p-2 rounded-lg bg-surface-800/30">
-                                                <p class="text-base sm:text-lg font-bold text-surface-200">{{ memberAttendance.summary.total_worked_hours }}h</p>
+                                                <p class="text-base sm:text-lg font-bold text-surface-200">{{ formatHours(memberAttendance.summary.total_worked_hours) }}</p>
                                                 <p class="text-[10px] text-surface-500">Total Hours</p>
                                             </div>
                                             <div class="text-center p-2 rounded-lg bg-surface-800/30">
-                                                <p class="text-base sm:text-lg font-bold text-surface-200">{{ memberAttendance.summary.avg_hours_per_day }}h</p>
+                                                <p class="text-base sm:text-lg font-bold text-surface-200">{{ formatHours(memberAttendance.summary.avg_hours_per_day) }}</p>
                                                 <p class="text-[10px] text-surface-500">Avg/Day</p>
                                             </div>
                                         </div>
@@ -1392,7 +1402,7 @@ onUnmounted(() => {
                                                         :class="day.pct >= 100 ? 'bg-emerald-400' : day.pct >= 50 ? 'bg-amber-400' : 'bg-red-400'"></div>
                                                 </div>
                                                 <div v-else class="w-2 h-2 rounded-full mx-auto mt-0.5" :class="statusDotColors[day.status] || 'bg-surface-700'"></div>
-                                                <p v-if="day.hours > 0" class="text-[9px] text-surface-500 mt-0.5">{{ day.hours }}h</p>
+                                                <p v-if="day.hours > 0" class="text-[9px] text-surface-500 mt-0.5">{{ formatHours(day.hours) }}</p>
                                             </div>
                                         </div>
 
@@ -1466,7 +1476,7 @@ onUnmounted(() => {
                                                             <span class="font-mono text-emerald-400">{{ s.in ? new Date(s.in).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--' }}</span>
                                                             <svg class="w-3 h-3 text-surface-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>
                                                             <span class="font-mono" :class="s.out ? 'text-red-400' : 'text-emerald-400'">{{ s.out ? new Date(s.out).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Active' }}</span>
-                                                            <span class="text-surface-500 ml-auto">{{ s.hours }}h</span>
+                                                            <span class="text-surface-500 ml-auto">{{ formatHours(s.hours) }}</span>
                                                         </div>
                                                         <!-- Punch In Location -->
                                                         <div v-if="s.in_location" class="mt-2 flex items-start gap-2">
@@ -1591,7 +1601,7 @@ onUnmounted(() => {
                                     <td class="px-4 py-4 text-center font-mono text-surface-300">{{ bidder.bids_today }}</td>
                                     <td class="px-4 py-4 text-center font-mono"
                                         :class="bidder.today_hours < bidder.min_hours_per_day && bidder.is_online ? 'text-amber-400' : 'text-surface-300'">
-                                        {{ bidder.today_hours }}h
+                                        {{ formatHours(bidder.today_hours) }}
                                     </td>
                                     <td class="px-4 py-4 text-right space-x-1">
                                         <button @click="openMemberProfile(bidder)"
@@ -1936,7 +1946,7 @@ onUnmounted(() => {
                                     </td>
                                     <td class="px-6 py-3 text-center font-mono text-surface-300">{{ bidder.total_bids }}</td>
                                     <td class="px-6 py-3 text-center font-mono text-surface-300">{{ bidder.bids_today }}</td>
-                                    <td class="px-6 py-3 text-center font-mono text-surface-300">{{ bidder.today_hours }}h</td>
+                                    <td class="px-6 py-3 text-center font-mono text-surface-300">{{ formatHours(bidder.today_hours) }}</td>
                                 </tr>
                             </tbody>
                         </table>
