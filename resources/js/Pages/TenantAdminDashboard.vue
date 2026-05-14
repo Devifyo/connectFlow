@@ -297,6 +297,26 @@ function formatHours(h) {
     return `${hours}h ${mins}m`;
 }
 
+function parseDevice(ua) {
+    if (!ua) return null;
+    let browser = 'Unknown';
+    let os = 'Unknown';
+    if (ua.includes('Edg/')) browser = 'Edge';
+    else if (ua.includes('OPR/') || ua.includes('Opera')) browser = 'Opera';
+    else if (ua.includes('Chrome/') && !ua.includes('Chromium')) browser = 'Chrome';
+    else if (ua.includes('Firefox/')) browser = 'Firefox';
+    else if (ua.includes('Safari/') && !ua.includes('Chrome')) browser = 'Safari';
+
+    if (ua.includes('iPhone')) os = 'iPhone';
+    else if (ua.includes('iPad')) os = 'iPad';
+    else if (ua.includes('Android')) os = 'Android';
+    else if (ua.includes('Windows')) os = 'Windows';
+    else if (ua.includes('Mac OS')) os = 'macOS';
+    else if (ua.includes('Linux')) os = 'Linux';
+
+    return `${browser} · ${os}`;
+}
+
 const statusLabels = { present: 'Present', absent: 'Absent', week_off: 'Week Off', half_day: 'Half Day', weekend: 'Weekend', future: 'Future', na: 'N/A' };
 const statusDotColors = { present: 'bg-emerald-400', absent: 'bg-red-400', week_off: 'bg-violet-400', half_day: 'bg-amber-400', weekend: 'bg-surface-600', future: 'bg-surface-700', na: 'bg-surface-700' };
 
@@ -1594,31 +1614,43 @@ onUnmounted(() => {
                                                             </span>
                                                             <span class="text-surface-500 ml-auto">{{ formatHours(s.hours) }}</span>
                                                         </div>
-                                                        <!-- Punch In Location -->
-                                                        <div v-if="s.in_location" class="mt-2 flex items-start gap-2">
+                                                        <!-- Punch In Location & Device -->
+                                                        <div v-if="s.in_location || s.in_ip" class="mt-2 flex items-start gap-2">
                                                             <span class="text-[9px] font-semibold text-emerald-400/70 uppercase w-6 flex-shrink-0 pt-0.5">IN</span>
                                                             <div class="flex-1 min-w-0">
-                                                                <p class="text-[10px] text-surface-400 leading-relaxed truncate" :title="s.in_location.address">{{ s.in_location.address || `${s.in_location.lat}, ${s.in_location.lng}` }}</p>
-                                                                <a :href="`https://www.google.com/maps?q=${s.in_location.lat},${s.in_location.lng}`" target="_blank"
+                                                                <p v-if="s.in_location" class="text-[10px] text-surface-400 leading-relaxed truncate" :title="s.in_location.address">{{ s.in_location.address || `${s.in_location.lat}, ${s.in_location.lng}` }}</p>
+                                                                <a v-if="s.in_location" :href="`https://www.google.com/maps?q=${s.in_location.lat},${s.in_location.lng}`" target="_blank"
                                                                     class="inline-flex items-center gap-1 text-[9px] text-brand hover:underline mt-0.5">
                                                                     <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1 1 15 0Z"/></svg>
                                                                     View on map
                                                                 </a>
+                                                                <div v-if="s.in_ip || s.in_device" class="flex items-center gap-1.5 mt-1 text-[9px] text-surface-500">
+                                                                    <svg class="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 17.25v1.007a3 3 0 0 1-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0 1 15 18.257V17.25m6-12V15a2.25 2.25 0 0 1-2.25 2.25H5.25A2.25 2.25 0 0 1 3 15V5.25A2.25 2.25 0 0 1 5.25 3h13.5A2.25 2.25 0 0 1 21 5.25Z"/></svg>
+                                                                    <span v-if="s.in_ip" class="font-mono">{{ s.in_ip }}</span>
+                                                                    <span v-if="s.in_ip && s.in_device" class="text-surface-600">·</span>
+                                                                    <span v-if="s.in_device" :title="s.in_device">{{ parseDevice(s.in_device) }}</span>
+                                                                </div>
                                                             </div>
                                                         </div>
-                                                        <!-- Punch Out Location -->
-                                                        <div v-if="s.out_location" class="mt-1.5 flex items-start gap-2">
+                                                        <!-- Punch Out Location & Device -->
+                                                        <div v-if="s.out_location || s.out_ip" class="mt-1.5 flex items-start gap-2">
                                                             <span class="text-[9px] font-semibold text-red-400/70 uppercase w-6 flex-shrink-0 pt-0.5">OUT</span>
                                                             <div class="flex-1 min-w-0">
-                                                                <p class="text-[10px] text-surface-400 leading-relaxed truncate" :title="s.out_location.address">{{ s.out_location.address || `${s.out_location.lat}, ${s.out_location.lng}` }}</p>
-                                                                <a :href="`https://www.google.com/maps?q=${s.out_location.lat},${s.out_location.lng}`" target="_blank"
+                                                                <p v-if="s.out_location" class="text-[10px] text-surface-400 leading-relaxed truncate" :title="s.out_location.address">{{ s.out_location.address || `${s.out_location.lat}, ${s.out_location.lng}` }}</p>
+                                                                <a v-if="s.out_location" :href="`https://www.google.com/maps?q=${s.out_location.lat},${s.out_location.lng}`" target="_blank"
                                                                     class="inline-flex items-center gap-1 text-[9px] text-brand hover:underline mt-0.5">
                                                                     <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1 1 15 0Z"/></svg>
                                                                     View on map
                                                                 </a>
+                                                                <div v-if="s.out_ip || s.out_device" class="flex items-center gap-1.5 mt-1 text-[9px] text-surface-500">
+                                                                    <svg class="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 17.25v1.007a3 3 0 0 1-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0 1 15 18.257V17.25m6-12V15a2.25 2.25 0 0 1-2.25 2.25H5.25A2.25 2.25 0 0 1 3 15V5.25A2.25 2.25 0 0 1 5.25 3h13.5A2.25 2.25 0 0 1 21 5.25Z"/></svg>
+                                                                    <span v-if="s.out_ip" class="font-mono">{{ s.out_ip }}</span>
+                                                                    <span v-if="s.out_ip && s.out_device" class="text-surface-600">·</span>
+                                                                    <span v-if="s.out_device" :title="s.out_device">{{ parseDevice(s.out_device) }}</span>
+                                                                </div>
                                                             </div>
                                                         </div>
-                                                        <div v-if="!s.in_location && !s.out_location" class="mt-1.5">
+                                                        <div v-if="!s.in_location && !s.out_location && !s.in_ip && !s.out_ip" class="mt-1.5">
                                                             <p class="text-[10px] text-surface-600 italic">No location data</p>
                                                         </div>
                                                     </div>

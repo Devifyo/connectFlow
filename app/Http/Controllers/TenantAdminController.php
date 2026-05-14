@@ -403,6 +403,10 @@ class TenantAdminController extends Controller
                     'hours' => round($hours, 2),
                     'in_location' => $l->punch_in_lat ? ['lat' => (float) $l->punch_in_lat, 'lng' => (float) $l->punch_in_lng, 'address' => $l->punch_in_address] : null,
                     'out_location' => $l->punch_out_lat ? ['lat' => (float) $l->punch_out_lat, 'lng' => (float) $l->punch_out_lng, 'address' => $l->punch_out_address] : null,
+                    'in_ip' => $l->punch_in_ip,
+                    'in_device' => $l->punch_in_device,
+                    'out_ip' => $l->punch_out_ip,
+                    'out_device' => $l->punch_out_device,
                 ];
             })->values();
 

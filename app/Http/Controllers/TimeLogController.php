@@ -35,6 +35,8 @@ class TimeLogController extends Controller
             'punch_in_lat' => $request->latitude,
             'punch_in_lng' => $request->longitude,
             'punch_in_address' => $request->address,
+            'punch_in_ip' => $request->ip(),
+            'punch_in_device' => $request->userAgent(),
         ]);
 
         return response()->json([
@@ -71,6 +73,8 @@ class TimeLogController extends Controller
             'punch_out_lat' => $request->latitude,
             'punch_out_lng' => $request->longitude,
             'punch_out_address' => $request->address,
+            'punch_out_ip' => $request->ip(),
+            'punch_out_device' => $request->userAgent(),
         ]);
 
         return response()->json([
