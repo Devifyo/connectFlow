@@ -48,7 +48,11 @@ const faceEnrolled = ref(props.face_recognition?.enrolled === true);
 const showFaceEnrollment = computed(() => faceEnabled.value && !faceEnrolled.value);
 const punchStep = ref('location');
 const faceVerifying = ref(false);
+const faceVerified = ref(false);
 const faceError = ref('');
+const punchSuccess = ref(false);
+const punchSuccessType = ref('');
+let punchSuccessLogId = null;
 const { videoRef: punchVideoRef, isStreaming: punchCamStreaming, error: punchCamError, startCamera: startPunchCam, stopCamera: stopPunchCam, captureFrame: capturePunchFrame, startRecording: startPunchRecording, stopRecording: stopPunchRecording } = useWebcam();
 const { queueUpload: queueVideoUpload } = useVideoUploader();
 
@@ -124,6 +128,10 @@ function openPunchModal() {
     punchLoading.value = false;
     punchStep.value = 'location';
     faceError.value = '';
+    faceVerified.value = false;
+    punchSuccess.value = false;
+    punchSuccessType.value = '';
+    punchSuccessLogId = null;
     showPunchModal.value = true;
     requestLocation();
 }
@@ -224,17 +232,18 @@ async function verifyAndPunch() {
         faceError.value = e.response?.data?.error || 'Verification failed. Please try again.';
     }
 
+    if (verified) {
+        faceVerified.value = true;
+        faceVerifying.value = false;
+        await executePunch();
+        return;
+    }
+
     const clip = punchRecordingActive ? await stopPunchRecording() : null;
     punchRecordingActive = false;
 
     if (clip) {
-        pendingAttemptClips.push({ blob: clip, verified });
-    }
-
-    if (verified) {
-        faceVerifying.value = false;
-        await executePunch();
-        return;
+        pendingAttemptClips.push({ blob: clip, verified: false });
     }
 
     startPunchRecording();
@@ -277,8 +286,9 @@ async function executePunch() {
             queueVideoUpload(entry.blob, type, logId, entry.verified);
         }
 
-        stopPunchCam();
-        showPunchModal.value = false;
+        punchSuccessLogId = logId;
+        punchSuccessType.value = type;
+        punchSuccess.value = true;
     } catch (e) {
         const type = wasPunchedIn ? 'punch_out' : 'punch_in';
         for (const entry of clips) {
@@ -289,6 +299,18 @@ async function executePunch() {
     } finally {
         punchLoading.value = false;
     }
+}
+
+async function closeSuccessModal() {
+    const clip = punchRecordingActive ? await stopPunchRecording() : null;
+    punchRecordingActive = false;
+
+    if (clip) {
+        queueVideoUpload(clip, punchSuccessType.value, punchSuccessLogId, true);
+    }
+
+    stopPunchCam();
+    showPunchModal.value = false;
 }
 
 // --- URL Checker ---
@@ -1980,7 +2002,7 @@ onUnmounted(() => {
             <div v-if="showPunchModal" class="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 backdrop-blur-sm" @click.self="closePunchModal();">
                 <div class="bg-surface-900 border border-surface-700/50 rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
                     <!-- Header -->
-                    <div class="px-6 py-4 border-b border-surface-800/50 flex items-center justify-between">
+                    <div v-if="!punchSuccess" class="px-6 py-4 border-b border-surface-800/50 flex items-center justify-between">
                         <div>
                             <h3 class="text-base font-semibold text-surface-100">{{ isPunchedIn ? 'Punch Out' : 'Punch In' }}</h3>
                             <p class="text-xs text-surface-500 mt-0.5">
@@ -2000,7 +2022,7 @@ onUnmounted(() => {
                     </div>
 
                     <!-- Body: Location Step -->
-                    <div v-show="punchStep === 'location'" class="px-6 py-5">
+                    <div v-show="punchStep === 'location' && !punchSuccess" class="px-6 py-5">
                         <!-- Locating spinner -->
                         <div v-if="punchLocating" class="flex flex-col items-center gap-3 py-8">
                             <div class="w-10 h-10 border-3 border-surface-600 border-t-brand rounded-full animate-spin"></div>
@@ -2063,7 +2085,7 @@ onUnmounted(() => {
                     </div>
 
                     <!-- Body: Face Verification Step -->
-                    <div v-if="punchStep === 'face'" class="px-6 py-5">
+                    <div v-if="punchStep === 'face' && !punchSuccess" class="px-6 py-5">
                         <div v-if="punchCamError" class="text-center py-6">
                             <div class="w-12 h-12 rounded-full bg-red-500/10 flex items-center justify-center mx-auto mb-3">
                                 <svg class="w-6 h-6 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
@@ -2091,41 +2113,67 @@ onUnmounted(() => {
                         </div>
                     </div>
 
+                    <!-- Body: Success State (camera still recording) -->
+                    <div v-if="punchSuccess" class="px-6 py-5">
+                        <div class="relative rounded-xl overflow-hidden bg-black mb-4">
+                            <video ref="punchVideoRef" class="w-full" autoplay playsinline muted></video>
+                            <div class="absolute inset-0 pointer-events-none">
+                                <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-44 h-44 sm:w-52 sm:h-52 rounded-full border-2 border-emerald-400/60"></div>
+                            </div>
+                            <div class="absolute inset-0 bg-emerald-500/10 flex items-center justify-center pointer-events-none">
+                                <div class="bg-surface-900/80 backdrop-blur-sm rounded-2xl px-5 py-4 text-center">
+                                    <div class="w-10 h-10 rounded-full bg-emerald-500/20 flex items-center justify-center mx-auto mb-2">
+                                        <svg class="w-5 h-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="m4.5 12.75 6 6 9-13.5"/></svg>
+                                    </div>
+                                    <p class="text-sm font-semibold text-emerald-400">Identity Verified</p>
+                                    <p class="text-xs text-surface-300 mt-1">{{ punchSuccessType === 'punch_in' ? 'Punched in' : 'Punched out' }} successfully</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- Footer -->
                     <div class="px-6 py-4 border-t border-surface-800/50 flex items-center justify-end gap-3">
-                        <button @click="closePunchModal();" class="btn-ghost text-xs px-4 py-2">Cancel</button>
+                        <template v-if="punchSuccess">
+                            <button @click="closeSuccessModal" class="px-5 py-2.5 rounded-xl text-xs font-semibold transition-all duration-200 bg-surface-700 text-surface-200 hover:bg-surface-600 active:scale-95">
+                                Close
+                            </button>
+                        </template>
+                        <template v-else>
+                            <button @click="closePunchModal();" class="btn-ghost text-xs px-4 py-2">Cancel</button>
 
-                        <!-- Location step button -->
-                        <button v-if="punchStep === 'location'"
-                            @click="confirmPunch"
-                            :disabled="!punchLocation || punchLoading"
-                            class="px-5 py-2.5 rounded-xl text-xs font-semibold transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed"
-                            :class="isPunchedIn
-                                ? 'bg-red-500 text-white hover:bg-red-600 active:scale-95'
-                                : 'bg-brand text-surface-950 hover:bg-brand-light active:scale-95'"
-                        >
-                            <span v-if="punchLoading" class="flex items-center gap-2">
-                                <div class="w-3.5 h-3.5 border-2 border-current/30 border-t-current rounded-full animate-spin"></div>
-                                Processing...
-                            </span>
-                            <span v-else>{{ faceEnabled && faceEnrolled ? 'Next: Verify Face' : (isPunchedIn ? 'Confirm Punch Out' : 'Confirm Punch In') }}</span>
-                        </button>
+                            <!-- Location step button -->
+                            <button v-if="punchStep === 'location'"
+                                @click="confirmPunch"
+                                :disabled="!punchLocation || punchLoading"
+                                class="px-5 py-2.5 rounded-xl text-xs font-semibold transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed"
+                                :class="isPunchedIn
+                                    ? 'bg-red-500 text-white hover:bg-red-600 active:scale-95'
+                                    : 'bg-brand text-surface-950 hover:bg-brand-light active:scale-95'"
+                            >
+                                <span v-if="punchLoading" class="flex items-center gap-2">
+                                    <div class="w-3.5 h-3.5 border-2 border-current/30 border-t-current rounded-full animate-spin"></div>
+                                    Processing...
+                                </span>
+                                <span v-else>{{ faceEnabled && faceEnrolled ? 'Next: Verify Face' : (isPunchedIn ? 'Confirm Punch Out' : 'Confirm Punch In') }}</span>
+                            </button>
 
-                        <!-- Face step button -->
-                        <button v-if="punchStep === 'face'"
-                            @click="verifyAndPunch"
-                            :disabled="!punchCamStreaming || faceVerifying"
-                            class="px-5 py-2.5 rounded-xl text-xs font-semibold transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed"
-                            :class="isPunchedIn
-                                ? 'bg-red-500 text-white hover:bg-red-600 active:scale-95'
-                                : 'bg-brand text-surface-950 hover:bg-brand-light active:scale-95'"
-                        >
-                            <span v-if="faceVerifying" class="flex items-center gap-2">
-                                <div class="w-3.5 h-3.5 border-2 border-current/30 border-t-current rounded-full animate-spin"></div>
-                                Verifying...
-                            </span>
-                            <span v-else>{{ isPunchedIn ? 'Verify & Punch Out' : 'Verify & Punch In' }}</span>
-                        </button>
+                            <!-- Face step button -->
+                            <button v-if="punchStep === 'face'"
+                                @click="verifyAndPunch"
+                                :disabled="!punchCamStreaming || faceVerifying"
+                                class="px-5 py-2.5 rounded-xl text-xs font-semibold transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed"
+                                :class="isPunchedIn
+                                    ? 'bg-red-500 text-white hover:bg-red-600 active:scale-95'
+                                    : 'bg-brand text-surface-950 hover:bg-brand-light active:scale-95'"
+                            >
+                                <span v-if="faceVerifying" class="flex items-center gap-2">
+                                    <div class="w-3.5 h-3.5 border-2 border-current/30 border-t-current rounded-full animate-spin"></div>
+                                    Verifying...
+                                </span>
+                                <span v-else>{{ isPunchedIn ? 'Verify & Punch Out' : 'Verify & Punch In' }}</span>
+                            </button>
+                        </template>
                     </div>
                 </div>
             </div>
