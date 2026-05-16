@@ -51,4 +51,19 @@ class IdHash
         $expected = substr(hash_hmac('sha256', $token . $expires, config('app.key')), 0, 10);
         return hash_equals($expected, $sig);
     }
+
+    public static function emailAvatarUrl(int $id): string
+    {
+        $token = self::encode($id);
+        $expires = time() + 86400;
+        $sig = substr(hash_hmac('sha256', 'avatar' . $token . $expires, config('app.key')), 0, 12);
+        return '/api/email-avatar/' . $token . '?e=' . $expires . '&s=' . $sig;
+    }
+
+    public static function verifyEmailAvatarSignature(string $token, int $expires, string $sig): bool
+    {
+        if ($expires < time()) return false;
+        $expected = substr(hash_hmac('sha256', 'avatar' . $token . $expires, config('app.key')), 0, 12);
+        return hash_equals($expected, $sig);
+    }
 }

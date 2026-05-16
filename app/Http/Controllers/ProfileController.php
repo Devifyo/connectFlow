@@ -130,6 +130,30 @@ class ProfileController extends Controller
         ]);
     }
 
+    public function emailAvatar(Request $request, string $token)
+    {
+        $expires = (int) $request->query('e');
+        $sig = (string) $request->query('s');
+
+        if (!$expires || !$sig || !IdHash::verifyEmailAvatarSignature($token, $expires, $sig)) {
+            abort(403);
+        }
+
+        $id = IdHash::decode($token);
+        if ($id === null) abort(404);
+
+        $user = \App\Models\User::withoutGlobalScopes()->find($id);
+        if (!$user || !$user->profile_picture) abort(404);
+
+        $disk = Storage::disk('local');
+        if (!$disk->exists($user->profile_picture)) abort(404);
+
+        return $disk->response($user->profile_picture, null, [
+            'Cache-Control' => 'public, max-age=86400',
+            'Content-Disposition' => 'inline',
+        ]);
+    }
+
     public function updateBasic(Request $request)
     {
         $user = $request->user();

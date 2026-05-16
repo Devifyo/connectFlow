@@ -94,6 +94,13 @@ class User extends Authenticatable
             ->withTimestamps();
     }
 
+    public function globalMessages()
+    {
+        return $this->belongsToMany(GlobalMessage::class, 'global_message_recipients')
+            ->withPivot('read_at', 'dismissed_at')
+            ->withTimestamps();
+    }
+
     public function getNotificationEmailAddress(): string
     {
         return $this->notification_email ?: $this->email;

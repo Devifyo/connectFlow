@@ -32,6 +32,11 @@ Route::get('/dashboard', function () {
 Route::post('/api/face/login', [\App\Http\Controllers\FaceRecognitionController::class, 'faceLogin'])
     ->middleware(['throttle:10,1']);
 
+// Email avatar (public, signed URL for email clients)
+Route::get('/api/email-avatar/{token}', [\App\Http\Controllers\ProfileController::class, 'emailAvatar'])
+    ->where('token', '[0-9a-zA-Z]{6}');
+
+
 Route::middleware('auth')->group(function () {
     Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');
     Route::patch('/profile', [ProfileController::class, 'update'])->name('profile.update');
@@ -73,6 +78,15 @@ Route::middleware('auth')->group(function () {
         Route::put('/api/admin/positions/{id}', [\App\Http\Controllers\PositionController::class, 'update']);
         Route::delete('/api/admin/positions/{id}', [\App\Http\Controllers\PositionController::class, 'destroy']);
         Route::post('/api/admin/positions/reorder', [\App\Http\Controllers\PositionController::class, 'reorder']);
+
+        // Global Messages (Announcements)
+        Route::get('/api/admin/global-messages/team-members', [\App\Http\Controllers\GlobalMessageController::class, 'teamMembers']);
+        Route::post('/api/admin/global-messages/send', [\App\Http\Controllers\GlobalMessageController::class, 'send']);
+        Route::get('/api/admin/global-messages/history', [\App\Http\Controllers\GlobalMessageController::class, 'history']);
+        Route::get('/api/admin/global-messages/{id}/recipients', [\App\Http\Controllers\GlobalMessageController::class, 'recipients']);
+        Route::get('/api/admin/global-messages/{id}/reactions-detail', [\App\Http\Controllers\GlobalMessageController::class, 'reactionsDetail']);
+        Route::put('/api/admin/global-messages/{id}', [\App\Http\Controllers\GlobalMessageController::class, 'update']);
+        Route::delete('/api/admin/global-messages/{id}', [\App\Http\Controllers\GlobalMessageController::class, 'destroy']);
     });
 
     // Stop impersonation (accessible while impersonating)
@@ -114,6 +128,15 @@ Route::middleware('auth')->group(function () {
     Route::post('/api/face/upload-video', [\App\Http\Controllers\FaceRecognitionController::class, 'uploadVideo']);
     Route::post('/api/face/upload-video-chunk', [\App\Http\Controllers\FaceRecognitionController::class, 'uploadVideoChunk']);
     Route::get('/api/face/video/{id}', [\App\Http\Controllers\FaceRecognitionController::class, 'streamVideo']);
+
+    // Global Messages (recipient side)
+    Route::get('/api/global-messages/pending', [\App\Http\Controllers\GlobalMessageController::class, 'pending']);
+    Route::get('/api/global-messages/my-history', [\App\Http\Controllers\GlobalMessageController::class, 'myHistory']);
+    Route::post('/api/global-messages/{id}/dismiss', [\App\Http\Controllers\GlobalMessageController::class, 'dismiss']);
+    Route::post('/api/global-messages/{id}/react', [\App\Http\Controllers\GlobalMessageController::class, 'react']);
+    Route::get('/api/global-messages/{id}/reactions', [\App\Http\Controllers\GlobalMessageController::class, 'reactions']);
+    Route::get('/api/global-messages/{id}/comments', [\App\Http\Controllers\GlobalMessageController::class, 'comments']);
+    Route::post('/api/global-messages/{id}/comments', [\App\Http\Controllers\GlobalMessageController::class, 'addComment']);
 
     // Presence heartbeat
     Route::post('/api/heartbeat', [\App\Http\Controllers\MessageController::class, 'heartbeat']);

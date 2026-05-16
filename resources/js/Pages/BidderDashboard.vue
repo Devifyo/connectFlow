@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue';
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue';
 import { Head, router } from '@inertiajs/vue3';
 import PitchFlowLogo from '@/Components/PitchFlowLogo.vue';
 import MessagingPanel from '@/Components/Messaging/MessagingPanel.vue';
@@ -13,13 +13,87 @@ import 'vue-tel-input/vue-tel-input.css';
 import { vProtectedSrc } from '@/directives/protectedSrc';
 import FaceEnrollmentModal from '@/Components/FaceEnrollmentModal.vue';
 import FaceScanCapture from '@/Components/FaceScanCapture.vue';
+import GlobalMessagePopup from '@/Components/GlobalMessagePopup.vue';
+import { useGlobalMessages } from '@/composables/useGlobalMessages';
 import { useWebcam } from '@/composables/useWebcam';
 import { useVideoUploader } from '@/composables/useVideoUploader';
 
 const props = defineProps(['auth', 'impersonating', 'face_recognition']);
 
-const { totalUnread, fetchUnreadCount, handleIncomingMessage, handleTypingEvent, handleReadEvent, handlePresenceEvent, togglePanel, startHeartbeat, openConversationByHash } = useMessaging();
+const { totalUnread, fetchUnreadCount, handleIncomingMessage, handleTypingEvent, handleReadEvent, handlePresenceEvent, togglePanel, startHeartbeat, openConversationByHash, startConversation, openPanel, setActiveConversation, fetchConversations, conversations } = useMessaging();
+const { handleGlobalMessageEvent, init: initGlobalMessages, myAnnouncements, myAnnouncementsLoading, fetchMyAnnouncements, toggleReaction, fetchReactions, fetchComments, addComment } = useGlobalMessages();
 useTabBadge(totalUnread, 'Dashboard - PitchFlow');
+
+const showAnnouncementsPanel = ref(false);
+const expandedAnnouncement = ref(null);
+const announcementReactions = ref({});
+const announcementComments = ref({});
+const commentInput = ref({});
+const availableEmojis = ['👍', '❤️', '🎉', '👀', '🚀', '💯'];
+
+function renderAnnouncementBody(body) {
+    if (!body) return '';
+    return body.replace(
+        /<span[^>]*data-type="mention"[^>]*data-id="(\d+)"[^>]*>/g,
+        (match, id) => match.replace('>', ` style="color:#84cc16;cursor:pointer;font-weight:500;" data-user-id="${id}">`)
+    );
+}
+
+function onAnnouncementBodyClick(e) {
+    const el = e.target.closest('[data-user-id]');
+    if (el) {
+        const userId = parseInt(el.dataset.userId);
+        if (userId) {
+            showAnnouncementsPanel.value = false;
+            openChatFromAnnouncement(userId);
+        }
+    }
+}
+
+async function openChatFromAnnouncement(userId) {
+    try {
+        const conversationId = await startConversation(userId);
+        await fetchConversations();
+        openPanel();
+        const conv = conversations.value.find(c => c.id === conversationId);
+        if (conv) setActiveConversation(conv);
+    } catch {}
+}
+
+watch(showAnnouncementsPanel, (open) => {
+    if (open) fetchMyAnnouncements();
+});
+
+async function toggleAnnouncementExpand(msgId) {
+    if (expandedAnnouncement.value === msgId) {
+        expandedAnnouncement.value = null;
+        return;
+    }
+    expandedAnnouncement.value = msgId;
+    const [reactionsData, commentsData] = await Promise.all([
+        fetchReactions(msgId),
+        fetchComments(msgId),
+    ]);
+    announcementReactions.value[msgId] = reactionsData;
+    announcementComments.value[msgId] = commentsData;
+}
+
+async function handleReaction(msgId, emoji) {
+    await toggleReaction(msgId, emoji);
+    const data = await fetchReactions(msgId);
+    announcementReactions.value[msgId] = data;
+}
+
+async function submitComment(msgId) {
+    const body = (commentInput.value[msgId] || '').trim();
+    if (!body) return;
+    const comment = await addComment(msgId, body);
+    if (comment) {
+        if (!announcementComments.value[msgId]) announcementComments.value[msgId] = [];
+        announcementComments.value[msgId].push(comment);
+        commentInput.value[msgId] = '';
+    }
+}
 
 async function stopImpersonating() {
     try {
@@ -849,12 +923,14 @@ onMounted(() => {
     fetchProfile();
     fetchUnreadCount();
     startHeartbeat();
+    initGlobalMessages();
     if (props.auth.user?.id && window.Echo) {
         window.Echo.private(`messages.${props.auth.user.id}`)
             .listen('.message.sent', handleIncomingMessage)
             .listen('.user.typing', handleTypingEvent)
             .listen('.messages.read', handleReadEvent)
-            .listen('.user.presence', handlePresenceEvent);
+            .listen('.user.presence', handlePresenceEvent)
+            .listen('.global.message', handleGlobalMessageEvent);
     }
 
     const params = new URLSearchParams(window.location.search);
@@ -919,6 +995,11 @@ onUnmounted(() => {
                         {{ isPunchedIn ? 'Punch Out' : 'Punch In' }}
                     </button>
 
+                    <button @click="showAnnouncementsPanel = !showAnnouncementsPanel" class="relative p-2 rounded-lg text-surface-400 hover:text-surface-100 hover:bg-surface-800/50 transition-colors" title="Announcements">
+                        <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M10.34 15.84c-.688-.06-1.386-.09-2.09-.09H7.5a4.5 4.5 0 110-9h.75c.704 0 1.402-.03 2.09-.09m0 9.18c.253.962.584 1.892.985 2.783.247.55.06 1.21-.463 1.511l-.657.38c-.551.318-1.26.117-1.527-.461a20.845 20.845 0 01-1.44-4.282m3.102.069a18.03 18.03 0 01-.59-4.59c0-1.586.205-3.124.59-4.59m0 9.18a23.848 23.848 0 018.835 2.535M10.34 6.66a23.847 23.847 0 008.835-2.535m0 0A23.74 23.74 0 0018.795 3m.38 1.125a23.91 23.91 0 011.014 5.395m-1.014 8.855c-.118.38-.245.754-.38 1.125m.38-1.125a23.91 23.91 0 001.014-5.395m0-3.46c.495.413.811 1.035.811 1.73 0 .695-.316 1.317-.811 1.73m0-3.46a24.347 24.347 0 010 3.46" />
+                        </svg>
+                    </button>
                     <button @click="togglePanel" class="relative p-2 rounded-lg text-surface-400 hover:text-surface-100 hover:bg-surface-800/50 transition-colors">
                         <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M8.625 9.75a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375m-13.5 3.01c0 1.6 1.123 2.994 2.707 3.227 1.087.16 2.185.283 3.293.369V21l4.184-4.183a1.14 1.14 0 01.778-.332 48.294 48.294 0 005.83-.498c1.585-.233 2.708-1.626 2.708-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z"/>
@@ -1776,6 +1857,108 @@ onUnmounted(() => {
             </div>
         </main>
         <MessagingPanel />
+        <GlobalMessagePopup />
+
+        <!-- Announcements History Panel -->
+        <Teleport to="body">
+            <Transition
+                enter-active-class="transition duration-200 ease-out"
+                enter-from-class="opacity-0"
+                enter-to-class="opacity-100"
+                leave-active-class="transition duration-150 ease-in"
+                leave-from-class="opacity-100"
+                leave-to-class="opacity-0"
+            >
+                <div v-if="showAnnouncementsPanel" class="fixed inset-0 z-[80] flex justify-end">
+                    <div class="absolute inset-0 bg-black/40" @click="showAnnouncementsPanel = false"></div>
+                    <div class="relative w-full max-w-md bg-surface-900 border-l border-surface-800/50 shadow-2xl flex flex-col h-full animate-slide-in-right">
+                        <div class="flex items-center justify-between px-5 py-4 border-b border-surface-800/50">
+                            <h2 class="text-base font-semibold text-surface-100">Announcements</h2>
+                            <button @click="showAnnouncementsPanel = false" class="p-1.5 rounded-lg text-surface-400 hover:text-surface-100 hover:bg-surface-800/50 transition-colors">
+                                <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                            </button>
+                        </div>
+                        <div class="flex-1 overflow-y-auto p-4 space-y-3">
+                            <div v-if="myAnnouncementsLoading" class="py-8 text-center text-surface-500 text-sm">Loading...</div>
+                            <div v-else-if="myAnnouncements.length === 0" class="py-8 text-center text-surface-500 text-sm">No announcements yet.</div>
+                            <div v-else v-for="msg in myAnnouncements" :key="msg.id" class="rounded-xl border bg-surface-800/30 overflow-hidden"
+                                 :class="msg.priority === 'urgent' ? 'border-red-500/30' : 'border-surface-700/40'">
+                                <div class="p-4">
+                                    <div class="flex items-center gap-2 mb-2">
+                                        <h3 class="text-sm font-semibold text-surface-100 truncate">{{ msg.title }}</h3>
+                                        <span v-if="msg.priority === 'urgent'" class="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-red-500/20 text-red-400">Urgent</span>
+                                    </div>
+                                    <div class="prose-popup text-sm text-surface-300 leading-relaxed mb-3" @click="onAnnouncementBodyClick" v-html="renderAnnouncementBody(msg.body)"></div>
+                                    <div class="flex items-center gap-2 text-[11px] text-surface-500 mb-3">
+                                        <span>From {{ msg.sender_name }}</span>
+                                        <span>&middot;</span>
+                                        <span>{{ new Date(msg.created_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) }}</span>
+                                    </div>
+
+                                    <!-- Reactions display -->
+                                    <div v-if="announcementReactions[msg.id]?.reactions?.length" class="flex flex-wrap gap-1.5 mb-3">
+                                        <button v-for="r in announcementReactions[msg.id].reactions" :key="r.emoji"
+                                            @click="handleReaction(msg.id, r.emoji)"
+                                            class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border transition-colors"
+                                            :class="announcementReactions[msg.id]?.user_reactions?.includes(r.emoji) ? 'bg-brand/10 border-brand/30 text-brand' : 'bg-surface-800 border-surface-700/50 text-surface-400 hover:border-surface-600'">
+                                            <span>{{ r.emoji }}</span>
+                                            <span class="font-medium">{{ r.count }}</span>
+                                        </button>
+                                    </div>
+
+                                    <!-- Action buttons -->
+                                    <div class="flex items-center gap-2">
+                                        <button @click="toggleAnnouncementExpand(msg.id)" class="text-xs font-medium text-surface-400 hover:text-surface-200 transition-colors">
+                                            {{ expandedAnnouncement === msg.id ? 'Hide' : 'React & Comment' }}
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <!-- Expanded: Reactions + Comments -->
+                                <div v-if="expandedAnnouncement === msg.id" class="border-t border-surface-700/40 p-4 bg-surface-900/40">
+                                    <!-- Quick reactions -->
+                                    <div class="flex items-center gap-1 mb-4">
+                                        <button v-for="emoji in availableEmojis" :key="emoji"
+                                            @click="handleReaction(msg.id, emoji)"
+                                            class="w-8 h-8 rounded-lg flex items-center justify-center text-base hover:bg-surface-700/50 transition-colors"
+                                            :class="announcementReactions[msg.id]?.user_reactions?.includes(emoji) ? 'bg-brand/10 ring-1 ring-brand/30' : ''">
+                                            {{ emoji }}
+                                        </button>
+                                    </div>
+
+                                    <!-- Comments -->
+                                    <div class="space-y-2.5 mb-3">
+                                        <div v-for="c in (announcementComments[msg.id] || [])" :key="c.id" class="flex gap-2">
+                                            <div class="w-6 h-6 rounded-full bg-surface-700 flex items-center justify-center text-[9px] font-semibold text-surface-300 flex-shrink-0 mt-0.5">
+                                                {{ c.user_name.charAt(0).toUpperCase() }}
+                                            </div>
+                                            <div class="flex-1 min-w-0">
+                                                <div class="flex items-baseline gap-2">
+                                                    <span class="text-xs font-medium text-surface-200">{{ c.user_name }}</span>
+                                                    <span class="text-[10px] text-surface-500">{{ new Date(c.created_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) }}</span>
+                                                </div>
+                                                <p class="text-xs text-surface-300 mt-0.5">{{ c.body }}</p>
+                                            </div>
+                                        </div>
+                                        <p v-if="!announcementComments[msg.id]?.length" class="text-xs text-surface-500">No comments yet. Be the first to share your thoughts.</p>
+                                    </div>
+
+                                    <!-- Add comment -->
+                                    <div class="flex gap-2">
+                                        <input v-model="commentInput[msg.id]" @keydown.enter="submitComment(msg.id)" type="text" placeholder="Add your thoughts..." class="flex-1 input-field text-xs py-2" />
+                                        <button @click="submitComment(msg.id)" :disabled="!(commentInput[msg.id] || '').trim()" class="px-3 py-2 text-xs font-medium rounded-lg bg-brand text-surface-950 hover:bg-brand/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+                                            Send
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </Transition>
+        </Teleport>
 
         <!-- Profile Edit Modal -->
         <Teleport to="body">

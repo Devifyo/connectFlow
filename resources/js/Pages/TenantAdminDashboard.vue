@@ -1,23 +1,34 @@
 <script setup>
 import { Head, router } from '@inertiajs/vue3';
-import { onMounted, onUnmounted, ref, computed } from 'vue';
+import { onMounted, onUnmounted, ref, computed, watch, nextTick } from 'vue';
 import PitchFlowLogo from '@/Components/PitchFlowLogo.vue';
 import MessagingPanel from '@/Components/Messaging/MessagingPanel.vue';
+import GlobalMessagePopup from '@/Components/GlobalMessagePopup.vue';
+import AnnouncementEditor from '@/Components/AnnouncementEditor.vue';
 import { useMessaging } from '@/composables/useMessaging';
+import { useGlobalMessages } from '@/composables/useGlobalMessages';
 import { useTabBadge } from '@/composables/useTabBadge';
 import { vProtectedSrc } from '@/directives/protectedSrc';
 import axios from 'axios';
+import Swal from 'sweetalert2';
 import { VueDatePicker } from '@vuepic/vue-datepicker';
 import '@vuepic/vue-datepicker/dist/main.css';
 
 const props = defineProps(['auth', 'face_recognition']);
 
-const { totalUnread, fetchUnreadCount, handleIncomingMessage, handleTypingEvent, handleReadEvent, handlePresenceEvent, togglePanel, startHeartbeat, openConversationByHash } = useMessaging();
+const { totalUnread, fetchUnreadCount, handleIncomingMessage, handleTypingEvent, handleReadEvent, handlePresenceEvent, togglePanel, startHeartbeat, openConversationByHash, startConversation, openPanel, setActiveConversation, fetchConversations, conversations } = useMessaging();
+const { handleGlobalMessageEvent, init: initGlobalMessages, pendingMessages, myAnnouncements: myReceivedAnnouncements, myAnnouncementsLoading: myReceivedLoading, fetchMyAnnouncements: fetchMyReceived, toggleReaction: toggleReactionReceived, fetchReactions: fetchReactionsReceived, fetchComments: fetchCommentsReceived, addComment: addCommentReceived } = useGlobalMessages();
 useTabBadge(totalUnread, 'Admin Dashboard - PitchFlow');
 
 const ready = ref(false);
 const activeTab = ref('pipeline');
 const loading = ref(true);
+const showReceivedAnnouncementsPanel = ref(false);
+const expandedReceivedAnnouncement = ref(null);
+const receivedReactions = ref({});
+const receivedComments = ref({});
+const receivedCommentInput = ref({});
+const receivedEmojis = ['👍', '❤️', '🎉', '👀', '🚀', '💯'];
 
 const bids = ref([]);
 const bidders = ref([]);
@@ -547,6 +558,246 @@ async function removeDayOverride(date) {
     } catch (e) {}
 }
 
+// --- Announcements ---
+const announcementMembers = ref([]);
+const announcementMembersLoading = ref(false);
+const announcementSelectedIds = ref([]);
+const announcementFilterPosition = ref('');
+const announcementFilterDesignation = ref('');
+const announcementSearch = ref('');
+const announcementForm = ref({ title: '', body: '', priority: 'normal' });
+const announcementSending = ref(false);
+const announcementSent = ref(false);
+const announcementHistory = ref([]);
+const announcementHistoryLoading = ref(false);
+const announcementDetailId = ref(null);
+const announcementRecipients = ref([]);
+const announcementReactionsAdmin = ref({});
+const announcementCommentsAdmin = ref({});
+const editingAnnouncementId = ref(null);
+const editAnnouncementForm = ref({ title: '', body: '', priority: 'normal' });
+const editAnnouncementSaving = ref(false);
+const announcementRecipientsLoading = ref(false);
+
+const uniqueDesignations = computed(() => {
+    const desigs = announcementMembers.value.map(m => m.designation).filter(Boolean);
+    return [...new Set(desigs)].sort();
+});
+
+async function fetchAnnouncementMembers() {
+    announcementMembersLoading.value = true;
+    try {
+        const params = {};
+        if (announcementFilterPosition.value) params.position_id = announcementFilterPosition.value;
+        if (announcementFilterDesignation.value) params.designation = announcementFilterDesignation.value;
+        if (announcementSearch.value) params.search = announcementSearch.value;
+        const { data } = await axios.get('/api/admin/global-messages/team-members', { params });
+        announcementMembers.value = data;
+    } catch (e) {} finally { announcementMembersLoading.value = false; }
+}
+
+function toggleAnnouncementMember(id) {
+    const idx = announcementSelectedIds.value.indexOf(id);
+    if (idx > -1) announcementSelectedIds.value.splice(idx, 1);
+    else announcementSelectedIds.value.push(id);
+}
+
+function selectAllAnnouncementMembers() {
+    announcementSelectedIds.value = announcementMembers.value.map(m => m.id);
+}
+
+function deselectAllAnnouncementMembers() {
+    announcementSelectedIds.value = [];
+}
+
+async function sendAnnouncement() {
+    const bodyText = announcementForm.value.body.replace(/<[^>]*>/g, '').trim();
+    if (!announcementForm.value.title || !bodyText || !announcementSelectedIds.value.length) return;
+    announcementSending.value = true;
+    try {
+        await axios.post('/api/admin/global-messages/send', {
+            title: announcementForm.value.title,
+            body: announcementForm.value.body,
+            priority: announcementForm.value.priority,
+            recipient_ids: announcementSelectedIds.value,
+        });
+        announcementSent.value = true;
+        announcementForm.value = { title: '', body: '', priority: 'normal' };
+        announcementSelectedIds.value = [];
+        setTimeout(() => { announcementSent.value = false; }, 3000);
+        fetchAnnouncementHistory();
+    } catch (e) {} finally { announcementSending.value = false; }
+}
+
+async function fetchAnnouncementHistory() {
+    announcementHistoryLoading.value = true;
+    try {
+        const { data } = await axios.get('/api/admin/global-messages/history');
+        announcementHistory.value = data.data;
+    } catch (e) {} finally { announcementHistoryLoading.value = false; }
+}
+
+async function viewAnnouncementRecipients(msgId) {
+    if (announcementDetailId.value === msgId) {
+        announcementDetailId.value = null;
+        return;
+    }
+    announcementDetailId.value = msgId;
+    announcementRecipientsLoading.value = true;
+    try {
+        const [recipientsRes, reactionsRes, commentsRes] = await Promise.all([
+            axios.get(`/api/admin/global-messages/${msgId}/recipients`),
+            axios.get(`/api/admin/global-messages/${msgId}/reactions-detail`),
+            axios.get(`/api/global-messages/${msgId}/comments`),
+        ]);
+        announcementRecipients.value = recipientsRes.data;
+        announcementReactionsAdmin.value[msgId] = reactionsRes.data;
+        announcementCommentsAdmin.value[msgId] = commentsRes.data;
+    } catch (e) {} finally { announcementRecipientsLoading.value = false; }
+}
+
+async function deleteAnnouncement(msgId) {
+    const result = await Swal.fire({
+        title: 'Delete Announcement?',
+        text: 'This will permanently remove the announcement and all reactions/comments. This cannot be undone.',
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonText: 'Delete',
+        cancelButtonText: 'Cancel',
+        confirmButtonColor: '#ef4444',
+        cancelButtonColor: '#334155',
+        background: '#1e293b',
+        color: '#f1f5f9',
+        customClass: {
+            popup: 'border border-surface-700 rounded-xl',
+        },
+    });
+    if (!result.isConfirmed) return;
+    try {
+        await axios.delete(`/api/admin/global-messages/${msgId}`);
+        announcementHistory.value = announcementHistory.value.filter(m => m.id !== msgId);
+        if (announcementDetailId.value === msgId) announcementDetailId.value = null;
+        Swal.fire({
+            title: 'Deleted',
+            text: 'Announcement has been removed.',
+            icon: 'success',
+            timer: 1500,
+            showConfirmButton: false,
+            background: '#1e293b',
+            color: '#f1f5f9',
+        });
+    } catch (e) {}
+}
+
+function stripHtmlPreview(html) {
+    if (!html) return '';
+    return html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function onAnnouncementBodyClick(e) {
+    const el = e.target.closest('[data-user-id], [data-id]');
+    if (el) {
+        const userId = parseInt(el.dataset.userId || el.dataset.id);
+        if (userId) openChatWithUser(userId);
+    }
+}
+
+async function openChatWithUser(userId) {
+    try {
+        const conversationId = await startConversation(userId);
+        await fetchConversations();
+        openPanel();
+        const conv = conversations.value.find(c => c.id === conversationId);
+        if (conv) setActiveConversation(conv);
+    } catch {}
+}
+
+watch(showReceivedAnnouncementsPanel, (open) => {
+    if (open) fetchMyReceived();
+});
+
+function renderReceivedBody(body) {
+    if (!body) return '';
+    return body.replace(
+        /<span[^>]*data-type="mention"[^>]*data-id="(\d+)"[^>]*>/g,
+        (match, id) => match.replace('>', ` style="color:#84cc16;cursor:pointer;font-weight:500;" data-user-id="${id}">`)
+    );
+}
+
+function onReceivedBodyClick(e) {
+    const el = e.target.closest('[data-user-id]');
+    if (el) {
+        const userId = parseInt(el.dataset.userId);
+        if (userId) {
+            showReceivedAnnouncementsPanel.value = false;
+            openChatWithUser(userId);
+        }
+    }
+}
+
+async function toggleReceivedExpand(msgId) {
+    if (expandedReceivedAnnouncement.value === msgId) {
+        expandedReceivedAnnouncement.value = null;
+        return;
+    }
+    expandedReceivedAnnouncement.value = msgId;
+    const [r, c] = await Promise.all([fetchReactionsReceived(msgId), fetchCommentsReceived(msgId)]);
+    receivedReactions.value[msgId] = r;
+    receivedComments.value[msgId] = c;
+}
+
+async function handleReceivedReaction(msgId, emoji) {
+    await toggleReactionReceived(msgId, emoji);
+    receivedReactions.value[msgId] = await fetchReactionsReceived(msgId);
+}
+
+async function submitReceivedComment(msgId) {
+    const body = (receivedCommentInput.value[msgId] || '').trim();
+    if (!body) return;
+    const comment = await addCommentReceived(msgId, body);
+    if (comment) {
+        if (!receivedComments.value[msgId]) receivedComments.value[msgId] = [];
+        receivedComments.value[msgId].push(comment);
+        receivedCommentInput.value[msgId] = '';
+    }
+}
+
+function startEditAnnouncement(msg) {
+    editingAnnouncementId.value = msg.id;
+    editAnnouncementForm.value = { title: msg.title, body: msg.body, priority: msg.priority };
+}
+
+function cancelEditAnnouncement() {
+    editingAnnouncementId.value = null;
+    editAnnouncementForm.value = { title: '', body: '', priority: 'normal' };
+}
+
+async function saveEditAnnouncement() {
+    if (!editAnnouncementForm.value.title.trim()) return;
+    editAnnouncementSaving.value = true;
+    try {
+        await axios.put(`/api/admin/global-messages/${editingAnnouncementId.value}`, editAnnouncementForm.value);
+        const idx = announcementHistory.value.findIndex(m => m.id === editingAnnouncementId.value);
+        if (idx > -1) {
+            announcementHistory.value[idx].title = editAnnouncementForm.value.title;
+            announcementHistory.value[idx].body = editAnnouncementForm.value.body;
+            announcementHistory.value[idx].priority = editAnnouncementForm.value.priority;
+        }
+        cancelEditAnnouncement();
+    } catch (e) {} finally { editAnnouncementSaving.value = false; }
+}
+
+watch(activeTab, (tab) => {
+    if (tab === 'announcements') {
+        fetchAnnouncementMembers();
+        fetchAnnouncementHistory();
+    }
+});
+
+watch([announcementFilterPosition, announcementFilterDesignation, announcementSearch], () => {
+    fetchAnnouncementMembers();
+});
+
 // --- Positions ---
 const positions = ref([]);
 const positionsLoading = ref(false);
@@ -823,12 +1074,14 @@ onMounted(async () => {
     loading.value = false;
     fetchUnreadCount();
     startHeartbeat();
+    initGlobalMessages();
     if (props.auth.user?.id && window.Echo) {
         window.Echo.private(`messages.${props.auth.user.id}`)
             .listen('.message.sent', handleIncomingMessage)
             .listen('.user.typing', handleTypingEvent)
             .listen('.messages.read', handleReadEvent)
-            .listen('.user.presence', handlePresenceEvent);
+            .listen('.user.presence', handlePresenceEvent)
+            .listen('.global.message', handleGlobalMessageEvent);
     }
 
     const params = new URLSearchParams(window.location.search);
@@ -901,6 +1154,14 @@ onUnmounted(() => {
                     </svg>
                     Agency Profile
                 </button>
+                <button @click="activeTab = 'announcements'"
+                    :class="activeTab === 'announcements' ? 'bg-surface-800/60 text-surface-100' : 'text-surface-400 hover:text-surface-200 hover:bg-surface-800/30'"
+                    class="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors">
+                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M10.34 15.84c-.688-.06-1.386-.09-2.09-.09H7.5a4.5 4.5 0 110-9h.75c.704 0 1.402-.03 2.09-.09m0 9.18c.253.962.584 1.892.985 2.783.247.55.06 1.21-.463 1.511l-.657.38c-.551.318-1.26.117-1.527-.461a20.845 20.845 0 01-1.44-4.282m3.102.069a18.03 18.03 0 01-.59-4.59c0-1.586.205-3.124.59-4.59m0 9.18a23.848 23.848 0 018.835 2.535M10.34 6.66a23.847 23.847 0 008.835-2.535m0 0A23.74 23.74 0 0018.795 3m.38 1.125a23.91 23.91 0 011.014 5.395m-1.014 8.855c-.118.38-.245.754-.38 1.125m.38-1.125a23.91 23.91 0 001.014-5.395m0-3.46c.495.413.811 1.035.811 1.73 0 .695-.316 1.317-.811 1.73m0-3.46a24.347 24.347 0 010 3.46" />
+                    </svg>
+                    Announcements
+                </button>
                 <button @click="activeTab = 'settings'"
                     :class="activeTab === 'settings' ? 'bg-surface-800/60 text-surface-100' : 'text-surface-400 hover:text-surface-200 hover:bg-surface-800/30'"
                     class="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors">
@@ -922,7 +1183,13 @@ onUnmounted(() => {
                         <p class="text-xs text-surface-500">Tenant Admin</p>
                     </div>
                 </div>
-                <button @click="togglePanel" class="mt-3 w-full btn-ghost text-xs justify-center relative">
+                <button @click="showReceivedAnnouncementsPanel = !showReceivedAnnouncementsPanel" class="mt-3 w-full btn-ghost text-xs justify-center relative">
+                    Announcements
+                    <span v-if="pendingMessages.length > 0" class="ml-1.5 min-w-[18px] h-[18px] rounded-full bg-orange-500 inline-flex items-center justify-center px-1">
+                        <span class="text-[9px] font-bold text-white leading-none">{{ pendingMessages.length }}</span>
+                    </span>
+                </button>
+                <button @click="togglePanel" class="mt-1 w-full btn-ghost text-xs justify-center relative">
                     Messages
                     <span v-if="totalUnread > 0" class="ml-1.5 min-w-[18px] h-[18px] rounded-full bg-brand inline-flex items-center justify-center px-1 animate-badge-blink">
                         <span class="text-[9px] font-bold text-surface-950 leading-none">{{ totalUnread > 99 ? '99+' : totalUnread }}</span>
@@ -944,6 +1211,14 @@ onUnmounted(() => {
                         <span class="text-sm font-bold">PitchFlow</span>
                     </div>
                     <div class="flex items-center gap-2">
+                        <button @click="showReceivedAnnouncementsPanel = !showReceivedAnnouncementsPanel" class="relative p-1.5 rounded-md text-surface-400 hover:text-surface-100 transition-colors" title="Announcements">
+                            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M10.34 15.84c-.688-.06-1.386-.09-2.09-.09H7.5a4.5 4.5 0 110-9h.75c.704 0 1.402-.03 2.09-.09m0 9.18c.253.962.584 1.892.985 2.783.247.55.06 1.21-.463 1.511l-.657.38c-.551.318-1.26.117-1.527-.461a20.845 20.845 0 01-1.44-4.282m3.102.069a18.03 18.03 0 01-.59-4.59c0-1.586.205-3.124.59-4.59m0 9.18a23.848 23.848 0 018.835 2.535M10.34 6.66a23.847 23.847 0 008.835-2.535m0 0A23.74 23.74 0 0018.795 3m.38 1.125a23.91 23.91 0 011.014 5.395m-1.014 8.855c-.118.38-.245.754-.38 1.125m.38-1.125a23.91 23.91 0 001.014-5.395m0-3.46c.495.413.811 1.035.811 1.73 0 .695-.316 1.317-.811 1.73m0-3.46a24.347 24.347 0 010 3.46" />
+                            </svg>
+                            <span v-if="pendingMessages.length > 0" class="absolute -top-1 -right-1 min-w-[14px] h-[14px] rounded-full bg-orange-500 flex items-center justify-center">
+                                <span class="text-[8px] font-bold text-white leading-none">{{ pendingMessages.length }}</span>
+                            </span>
+                        </button>
                         <button @click="togglePanel" class="relative p-1.5 rounded-md text-surface-400 hover:text-surface-100 transition-colors">
                             <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
                                 <path stroke-linecap="round" stroke-linejoin="round" d="M8.625 9.75a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375m-13.5 3.01c0 1.6 1.123 2.994 2.707 3.227 1.087.16 2.185.283 3.293.369V21l4.184-4.183a1.14 1.14 0 01.778-.332 48.294 48.294 0 005.83-.498c1.585-.233 2.708-1.626 2.708-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z"/>
@@ -961,7 +1236,7 @@ onUnmounted(() => {
                 </div>
                 <!-- Mobile tab bar -->
                 <div class="px-4 pb-2 flex gap-1">
-                    <button v-for="tab in ['pipeline', 'team', 'positions', 'reports', 'agency', 'settings']" :key="tab"
+                    <button v-for="tab in ['pipeline', 'team', 'positions', 'reports', 'agency', 'announcements', 'settings']" :key="tab"
                         @click="activeTab = tab"
                         :class="activeTab === tab ? 'bg-surface-700 text-surface-100' : 'text-surface-400'"
                         class="flex-1 py-1.5 rounded-md text-xs font-medium capitalize transition-colors text-center">
@@ -2322,6 +2597,250 @@ onUnmounted(() => {
                 </div>
             </main>
 
+            <!-- ========== ANNOUNCEMENTS TAB ========== -->
+            <main v-else-if="activeTab === 'announcements'" class="flex-1 p-6 overflow-auto" :class="{ 'animate-fade-in': ready }">
+                <div class="max-w-4xl space-y-6">
+                    <!-- Compose Section -->
+                    <div class="card p-6">
+                        <h2 class="text-base font-semibold text-surface-100 mb-1">Send Announcement</h2>
+                        <p class="text-sm text-surface-400 mb-5">Post a message that will appear as a popup to selected team members.</p>
+
+                        <!-- Success feedback -->
+                        <div v-if="announcementSent" class="mb-4 p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-sm font-medium">
+                            Announcement sent successfully!
+                        </div>
+
+                        <!-- Message Form -->
+                        <div class="space-y-4 mb-6">
+                            <div>
+                                <label class="block text-xs font-medium text-surface-400 mb-1.5">Title</label>
+                                <input v-model="announcementForm.title" type="text" placeholder="Announcement title..." class="input-field text-sm" />
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-surface-400 mb-1.5">Message <span class="text-surface-500 font-normal">— type @ to mention a team member</span></label>
+                                <AnnouncementEditor v-model="announcementForm.body" :members="announcementMembers" />
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-surface-400 mb-1.5">Priority</label>
+                                <div class="flex gap-3">
+                                    <button @click="announcementForm.priority = 'normal'"
+                                        :class="announcementForm.priority === 'normal' ? 'bg-brand/20 border-brand/50 text-brand' : 'bg-surface-800 border-surface-700 text-surface-400'"
+                                        class="px-3 py-1.5 text-sm font-medium rounded-lg border transition-colors">
+                                        Normal
+                                    </button>
+                                    <button @click="announcementForm.priority = 'urgent'"
+                                        :class="announcementForm.priority === 'urgent' ? 'bg-red-500/20 border-red-500/50 text-red-400' : 'bg-surface-800 border-surface-700 text-surface-400'"
+                                        class="px-3 py-1.5 text-sm font-medium rounded-lg border transition-colors">
+                                        Urgent
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Team Member Selection -->
+                        <div class="border-t border-surface-800/50 pt-5">
+                            <div class="flex items-center justify-between mb-4">
+                                <h3 class="text-sm font-semibold text-surface-200">Select Recipients</h3>
+                                <div class="flex gap-2">
+                                    <button @click="selectAllAnnouncementMembers" class="text-xs font-medium text-brand hover:text-brand/80 transition-colors">Select All</button>
+                                    <span class="text-surface-600">|</span>
+                                    <button @click="deselectAllAnnouncementMembers" class="text-xs font-medium text-surface-400 hover:text-surface-200 transition-colors">Deselect All</button>
+                                </div>
+                            </div>
+
+                            <!-- Filters -->
+                            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+                                <div>
+                                    <input v-model="announcementSearch" type="text" placeholder="Search by name..." class="input-field text-sm" />
+                                </div>
+                                <div>
+                                    <select v-model="announcementFilterPosition" class="input-field text-sm">
+                                        <option value="">All Positions</option>
+                                        <option v-for="pos in positions" :key="pos.id" :value="pos.id">{{ pos.title }}</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <select v-model="announcementFilterDesignation" class="input-field text-sm">
+                                        <option value="">All Designations</option>
+                                        <option v-for="d in uniqueDesignations" :key="d" :value="d">{{ d }}</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <!-- Selected count -->
+                            <div class="mb-3 text-xs text-surface-400">
+                                <span class="text-brand font-semibold">{{ announcementSelectedIds.length }}</span> team member{{ announcementSelectedIds.length !== 1 ? 's' : '' }} selected
+                            </div>
+
+                            <!-- Members list -->
+                            <div v-if="announcementMembersLoading" class="py-8 text-center text-surface-500 text-sm">Loading team members...</div>
+                            <div v-else-if="announcementMembers.length === 0" class="py-8 text-center text-surface-500 text-sm">No team members found.</div>
+                            <div v-else class="max-h-64 overflow-y-auto rounded-lg border border-surface-800/50 divide-y divide-surface-800/30">
+                                <label v-for="member in announcementMembers" :key="member.id"
+                                    class="flex items-center gap-3 px-4 py-2.5 hover:bg-surface-800/30 cursor-pointer transition-colors"
+                                    :class="{ 'bg-brand/5': announcementSelectedIds.includes(member.id) }">
+                                    <input type="checkbox" :checked="announcementSelectedIds.includes(member.id)"
+                                        @change="toggleAnnouncementMember(member.id)"
+                                        class="w-4 h-4 rounded border-surface-600 bg-surface-800 text-brand focus:ring-brand/50 focus:ring-offset-0" />
+                                    <div class="w-8 h-8 rounded-full bg-surface-700 flex items-center justify-center text-xs font-semibold text-surface-300 flex-shrink-0">
+                                        {{ member.name.charAt(0).toUpperCase() }}
+                                    </div>
+                                    <div class="flex-1 min-w-0">
+                                        <p class="text-sm font-medium text-surface-200 truncate">{{ member.name }}</p>
+                                        <p class="text-xs text-surface-500 truncate">{{ member.designation || member.positions?.[0] || member.email }}</p>
+                                    </div>
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- Send Button -->
+                        <div class="mt-5 flex justify-end">
+                            <button @click="sendAnnouncement"
+                                :disabled="announcementSending || !announcementForm.title || !announcementForm.body || announcementForm.body === '<p></p>' || !announcementSelectedIds.length"
+                                class="px-5 py-2.5 text-sm font-semibold rounded-lg bg-brand text-surface-950 hover:bg-brand/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2">
+                                <svg v-if="announcementSending" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                                </svg>
+                                <svg v-else class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
+                                </svg>
+                                {{ announcementSending ? 'Sending...' : 'Send Announcement' }}
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- History Section -->
+                    <div class="card p-6">
+                        <h2 class="text-base font-semibold text-surface-100 mb-4">Sent Announcements</h2>
+                        <div v-if="announcementHistoryLoading" class="py-6 text-center text-surface-500 text-sm">Loading history...</div>
+                        <div v-else-if="announcementHistory.length === 0" class="py-6 text-center text-surface-500 text-sm">No announcements sent yet.</div>
+                        <div v-else class="space-y-3">
+                            <div v-for="msg in announcementHistory" :key="msg.id" class="rounded-lg bg-surface-800/40 border border-surface-800/50 overflow-hidden">
+                                <!-- Edit mode -->
+                                <div v-if="editingAnnouncementId === msg.id" class="p-4 space-y-3">
+                                    <input v-model="editAnnouncementForm.title" class="w-full bg-surface-800 border border-surface-700 rounded-lg px-3 py-2 text-sm text-surface-200 placeholder:text-surface-500 focus:outline-none focus:border-brand/50" placeholder="Title" />
+                                    <AnnouncementEditor v-model="editAnnouncementForm.body" :members="announcementMembers" />
+                                    <div class="flex items-center gap-3">
+                                        <select v-model="editAnnouncementForm.priority" class="bg-surface-800 border border-surface-700 rounded-lg px-3 py-1.5 text-xs text-surface-300 focus:outline-none focus:border-brand/50">
+                                            <option value="normal">Normal</option>
+                                            <option value="urgent">Urgent</option>
+                                        </select>
+                                        <div class="ml-auto flex gap-2">
+                                            <button @click="cancelEditAnnouncement" class="px-3 py-1.5 text-xs font-medium rounded-lg text-surface-400 hover:text-surface-200 border border-surface-700 hover:border-surface-500 transition-colors">Cancel</button>
+                                            <button @click="saveEditAnnouncement" :disabled="editAnnouncementSaving || !editAnnouncementForm.title.trim()" class="px-3 py-1.5 text-xs font-medium rounded-lg bg-brand text-surface-950 hover:bg-brand/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+                                                {{ editAnnouncementSaving ? 'Saving...' : 'Save' }}
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Normal view -->
+                                <div v-else class="p-4 cursor-pointer hover:bg-surface-800/60 transition-colors" @click="viewAnnouncementRecipients(msg.id)">
+                                    <div class="flex items-start justify-between gap-3">
+                                        <div class="min-w-0">
+                                            <div class="flex items-center gap-2">
+                                                <h4 class="text-sm font-semibold text-surface-200 truncate">{{ msg.title }}</h4>
+                                                <span v-if="msg.priority === 'urgent'" class="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-red-500/20 text-red-400">Urgent</span>
+                                            </div>
+                                            <p class="text-xs text-surface-400 mt-1 line-clamp-2">{{ stripHtmlPreview(msg.body) }}</p>
+                                        </div>
+                                        <div class="text-right flex-shrink-0 flex flex-col items-end">
+                                            <div class="flex items-center gap-2">
+                                                <p class="text-xs text-surface-500">{{ new Date(msg.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) }}</p>
+                                                <button @click.stop="startEditAnnouncement(msg)" class="p-1 rounded hover:bg-brand/20 text-surface-500 hover:text-brand transition-colors" title="Edit announcement">
+                                                    <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                                        <path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10" />
+                                                    </svg>
+                                                </button>
+                                                <button @click.stop="deleteAnnouncement(msg.id)" class="p-1 rounded hover:bg-red-500/20 text-surface-500 hover:text-red-400 transition-colors" title="Delete announcement">
+                                                    <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                                        <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                                                    </svg>
+                                                </button>
+                                            </div>
+                                            <p class="text-[11px] text-surface-500 mt-0.5">{{ msg.read_count }}/{{ msg.recipients_count }} read</p>
+                                            <svg class="w-4 h-4 mt-1 ml-auto text-surface-500 transition-transform" :class="{ 'rotate-180': announcementDetailId === msg.id }" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                                                <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+                                            </svg>
+                                        </div>
+                                    </div>
+                                </div>
+                                <!-- Recipients detail panel -->
+                                <div v-if="announcementDetailId === msg.id" class="border-t border-surface-700/50 px-4 py-3 bg-surface-900/50">
+                                    <!-- Full formatted body -->
+                                    <div class="prose-popup text-sm text-surface-300 leading-relaxed mb-4 pb-3 border-b border-surface-700/50 overflow-hidden break-words [&>*]:max-w-full" @click="onAnnouncementBodyClick" v-html="msg.body"></div>
+
+                                    <div v-if="announcementRecipientsLoading" class="py-3 text-center text-surface-500 text-xs">Loading recipients...</div>
+                                    <div v-else>
+                                        <div class="flex gap-4 mb-3">
+                                            <span class="text-xs font-medium text-emerald-400">{{ announcementRecipients.filter(r => r.read_at).length }} Read</span>
+                                            <span class="text-xs font-medium text-surface-500">{{ announcementRecipients.filter(r => !r.read_at).length }} Unread</span>
+                                        </div>
+                                        <div class="max-h-48 overflow-y-auto space-y-1.5">
+                                            <div v-for="r in announcementRecipients" :key="r.id" class="flex items-center gap-2.5 py-1.5 px-2 rounded-md" :class="r.read_at ? 'bg-emerald-500/5' : 'bg-surface-800/30'">
+                                                <div class="w-6 h-6 rounded-full bg-surface-700 flex items-center justify-center text-[10px] font-semibold text-surface-300 flex-shrink-0">
+                                                    {{ r.name.charAt(0).toUpperCase() }}
+                                                </div>
+                                                <div class="flex-1 min-w-0">
+                                                    <p class="text-xs font-medium text-surface-200 truncate">{{ r.name }}</p>
+                                                    <p class="text-[10px] text-surface-500 truncate">{{ r.designation || r.email }}</p>
+                                                </div>
+                                                <div class="flex-shrink-0">
+                                                    <span v-if="r.read_at" class="inline-flex items-center gap-1 text-[10px] font-medium text-emerald-400">
+                                                        <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                                            <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                                                        </svg>
+                                                        {{ new Date(r.read_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) }}
+                                                    </span>
+                                                    <span v-else class="text-[10px] font-medium text-surface-500">Not read</span>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <!-- Reactions detail -->
+                                        <div v-if="announcementReactionsAdmin[msg.id]?.length" class="mt-4 pt-3 border-t border-surface-700/50">
+                                            <h5 class="text-xs font-semibold text-surface-300 mb-2">Reactions ({{ announcementReactionsAdmin[msg.id].length }})</h5>
+                                            <div class="flex flex-wrap gap-2">
+                                                <div v-for="(r, idx) in announcementReactionsAdmin[msg.id]" :key="idx"
+                                                    class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-surface-800 border border-surface-700 text-xs">
+                                                    <span>{{ r.emoji }}</span>
+                                                    <div class="w-4 h-4 rounded-full bg-surface-700 flex items-center justify-center flex-shrink-0 overflow-hidden">
+                                                        <img v-if="r.user_picture" v-protected-src="r.user_picture" class="w-full h-full object-cover" />
+                                                        <span v-else class="text-[8px] text-surface-400">{{ (r.user_name || '?')[0] }}</span>
+                                                    </div>
+                                                    <span class="text-surface-300">{{ r.user_name }}</span>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <!-- Comments -->
+                                        <div v-if="announcementCommentsAdmin[msg.id]?.length" class="mt-4 pt-3 border-t border-surface-700/50">
+                                            <h5 class="text-xs font-semibold text-surface-300 mb-2">Comments ({{ announcementCommentsAdmin[msg.id].length }})</h5>
+                                            <div class="space-y-2.5 max-h-48 overflow-y-auto">
+                                                <div v-for="c in announcementCommentsAdmin[msg.id]" :key="c.id" class="flex items-start gap-2.5">
+                                                    <div class="w-6 h-6 rounded-full bg-surface-700 flex items-center justify-center text-[10px] font-semibold text-surface-300 flex-shrink-0 overflow-hidden">
+                                                        <img v-if="c.user_picture" v-protected-src="c.user_picture" class="w-full h-full object-cover" />
+                                                        <span v-else>{{ (c.user_name || '?')[0].toUpperCase() }}</span>
+                                                    </div>
+                                                    <div class="flex-1 min-w-0">
+                                                        <div class="flex items-baseline gap-1.5">
+                                                            <span class="text-xs font-medium text-surface-200">{{ c.user_name }}</span>
+                                                            <span class="text-[9px] text-surface-500">{{ new Date(c.created_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) }}</span>
+                                                        </div>
+                                                        <p class="text-xs text-surface-400 break-words mt-0.5">{{ c.body }}</p>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </main>
+
             <!-- ========== SETTINGS TAB ========== -->
             <main v-else-if="activeTab === 'settings'" class="flex-1 p-6 overflow-auto" :class="{ 'animate-fade-in': ready }">
                 <div class="max-w-xl space-y-6">
@@ -2414,5 +2933,99 @@ onUnmounted(() => {
             </main>
         </div>
         <MessagingPanel />
+        <GlobalMessagePopup />
+
+        <!-- Received Announcements Slide-out Panel -->
+        <Teleport to="body">
+            <div v-if="showReceivedAnnouncementsPanel" class="fixed inset-0 z-[80] flex justify-end">
+                <div class="absolute inset-0 bg-black/40" @click="showReceivedAnnouncementsPanel = false"></div>
+                <div class="relative w-full max-w-md h-full bg-surface-900 border-l border-surface-800/50 flex flex-col animate-slide-in-right">
+                    <!-- Header -->
+                    <div class="flex items-center justify-between px-5 py-4 border-b border-surface-800/50 flex-shrink-0">
+                        <h2 class="text-base font-semibold text-surface-100">Announcements</h2>
+                        <button @click="showReceivedAnnouncementsPanel = false" class="p-1.5 rounded-lg text-surface-400 hover:text-surface-100 hover:bg-surface-800/50 transition-colors">
+                            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+                        </button>
+                    </div>
+                    <!-- Content -->
+                    <div class="flex-1 overflow-y-auto p-4 space-y-3">
+                        <div v-if="myReceivedLoading" class="py-8 text-center text-surface-500 text-sm">Loading...</div>
+                        <div v-else-if="myReceivedAnnouncements.length === 0" class="py-8 text-center text-surface-500 text-sm">No announcements yet.</div>
+                        <div v-else v-for="msg in myReceivedAnnouncements" :key="msg.id" class="rounded-xl border bg-surface-800/30 overflow-hidden"
+                             :class="msg.priority === 'urgent' ? 'border-red-500/30' : 'border-surface-700/40'">
+                            <div class="p-4">
+                                <div class="flex items-center gap-2 mb-2">
+                                    <h3 class="text-sm font-semibold text-surface-100 truncate">{{ msg.title }}</h3>
+                                    <span v-if="msg.priority === 'urgent'" class="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-red-500/20 text-red-400">Urgent</span>
+                                </div>
+                                <div class="prose-popup text-sm text-surface-300 leading-relaxed mb-3" @click="onReceivedBodyClick" v-html="renderReceivedBody(msg.body)"></div>
+                                <div class="flex items-center gap-2 text-[11px] text-surface-500 mb-3">
+                                    <span>From {{ msg.sender_name }}</span>
+                                    <span>&middot;</span>
+                                    <span>{{ new Date(msg.created_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) }}</span>
+                                </div>
+
+                                <!-- Reactions display -->
+                                <div v-if="receivedReactions[msg.id]?.reactions?.length" class="flex flex-wrap gap-1.5 mb-3">
+                                    <button v-for="r in receivedReactions[msg.id].reactions" :key="r.emoji"
+                                        @click="handleReceivedReaction(msg.id, r.emoji)"
+                                        class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border transition-colors"
+                                        :class="receivedReactions[msg.id]?.user_reactions?.includes(r.emoji) ? 'bg-brand/10 border-brand/30 text-brand' : 'bg-surface-800 border-surface-700/50 text-surface-400 hover:border-surface-600'">
+                                        <span>{{ r.emoji }}</span>
+                                        <span class="font-medium">{{ r.count }}</span>
+                                    </button>
+                                </div>
+
+                                <button @click="toggleReceivedExpand(msg.id)" class="text-xs font-medium text-surface-400 hover:text-surface-200 transition-colors">
+                                    {{ expandedReceivedAnnouncement === msg.id ? 'Hide' : 'React & Comment' }}
+                                </button>
+                            </div>
+
+                            <!-- Expanded: Reactions + Comments -->
+                            <div v-if="expandedReceivedAnnouncement === msg.id" class="border-t border-surface-700/40 p-4 bg-surface-900/40">
+                                <!-- Quick reactions -->
+                                <div class="flex items-center gap-1 mb-4">
+                                    <button v-for="emoji in receivedEmojis" :key="emoji"
+                                        @click="handleReceivedReaction(msg.id, emoji)"
+                                        class="w-8 h-8 rounded-lg flex items-center justify-center text-base hover:bg-surface-700/50 transition-colors"
+                                        :class="receivedReactions[msg.id]?.user_reactions?.includes(emoji) ? 'bg-brand/10' : ''">
+                                        {{ emoji }}
+                                    </button>
+                                </div>
+
+                                <!-- Comments -->
+                                <div class="space-y-2.5 mb-3 max-h-48 overflow-y-auto">
+                                    <div v-for="c in (receivedComments[msg.id] || [])" :key="c.id" class="flex items-start gap-2">
+                                        <div class="w-5 h-5 rounded-full bg-surface-700 flex items-center justify-center flex-shrink-0 overflow-hidden">
+                                            <img v-if="c.user_picture" v-protected-src="c.user_picture" class="w-full h-full object-cover" />
+                                            <span v-else class="text-[9px] text-surface-400">{{ (c.user_name || '?')[0] }}</span>
+                                        </div>
+                                        <div class="flex-1 min-w-0">
+                                            <div class="flex items-baseline gap-1.5">
+                                                <span class="text-[11px] font-medium text-surface-200">{{ c.user_name }}</span>
+                                                <span class="text-[9px] text-surface-500">{{ new Date(c.created_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) }}</span>
+                                            </div>
+                                            <p class="text-xs text-surface-300 break-words">{{ c.body }}</p>
+                                        </div>
+                                    </div>
+                                    <div v-if="!receivedComments[msg.id]?.length" class="text-xs text-surface-500 italic">No comments yet</div>
+                                </div>
+
+                                <!-- Comment input -->
+                                <div class="flex items-center gap-2">
+                                    <input v-model="receivedCommentInput[msg.id]" @keyup.enter="submitReceivedComment(msg.id)"
+                                        placeholder="Add a comment..."
+                                        class="flex-1 bg-surface-800 border border-surface-700 rounded-lg px-3 py-1.5 text-xs text-surface-200 placeholder:text-surface-500 focus:outline-none focus:border-brand/50" />
+                                    <button @click="submitReceivedComment(msg.id)" :disabled="!(receivedCommentInput[msg.id] || '').trim()"
+                                        class="px-2.5 py-1.5 text-xs font-medium rounded-lg bg-brand text-surface-950 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-brand/90 transition-colors">
+                                        Send
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </Teleport>
     </div>
 </template>
