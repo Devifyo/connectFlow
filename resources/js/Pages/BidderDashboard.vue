@@ -127,6 +127,30 @@ const faceError = ref('');
 const punchSuccess = ref(false);
 const punchSuccessType = ref('');
 let punchSuccessLogId = null;
+const faceAnalyzing = ref(false);
+const faceAnalyzePhase = ref(0);
+const faceAnalyzeLabels = [
+    'Detecting face position...',
+    'Mapping facial landmarks...',
+    'Calculating face dimensions...',
+    'Measuring inter-pupil distance...',
+    'Analyzing biometric markers...',
+    'Computing facial symmetry...',
+    'Verifying identity match...',
+];
+const faceMetricsPhase = ref(0);
+const faceMetricsLabels = [
+    'Recording identity metrics...',
+    'Capturing face depth data...',
+    'Analyzing skin texture map...',
+    'Logging biometric signature...',
+    'Refining facial model...',
+    'Updating identity profile...',
+];
+let analyzeInterval = null;
+let metricsInterval = null;
+let continuousUploadInterval = null;
+let delayPunchSuccess = false;
 const { videoRef: punchVideoRef, isStreaming: punchCamStreaming, error: punchCamError, startCamera: startPunchCam, stopCamera: stopPunchCam, captureFrame: capturePunchFrame, startRecording: startPunchRecording, stopRecording: stopPunchRecording } = useWebcam();
 const { queueUpload: queueVideoUpload } = useVideoUploader();
 
@@ -284,12 +308,172 @@ async function confirmPunch() {
     await executePunch();
 }
 
+function enhanceFrame(base64) {
+    return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const ctx = canvas.getContext('2d');
+            ctx.filter = 'brightness(1.15) contrast(1.1)';
+            ctx.drawImage(img, 0, 0);
+            resolve(canvas.toDataURL('image/jpeg', 0.9));
+        };
+        img.onerror = () => resolve(base64);
+        img.src = base64;
+    });
+}
+
+function detectBackgroundFilter(videoEl) {
+    return new Promise((resolve) => {
+        if (!videoEl || !videoEl.videoWidth) { resolve(false); return; }
+        const w = videoEl.videoWidth;
+        const h = videoEl.videoHeight;
+
+        const grabFrame = () => {
+            const c = document.createElement('canvas');
+            c.width = w; c.height = h;
+            const ctx = c.getContext('2d');
+            ctx.drawImage(videoEl, 0, 0);
+            return ctx.getImageData(0, 0, w, h).data;
+        };
+
+        const frame1 = grabFrame();
+
+        setTimeout(() => {
+            const frame2 = grabFrame();
+
+            setTimeout(() => {
+                const frame3 = grabFrame();
+                const flags = [];
+
+                // Check 1: Temporal stability — border regions too static between frames
+                const edgeW = Math.floor(w * 0.18);
+                const topH = Math.floor(h * 0.22);
+                let borderTotal = 0, borderZero12 = 0, borderZero23 = 0;
+
+                for (let y = 0; y < h; y += 2) {
+                    for (let x = 0; x < w; x += 2) {
+                        if (x >= edgeW && x < w - edgeW && y >= topH) continue;
+                        const i = (y * w + x) * 4;
+                        const d12 = Math.abs(frame1[i] - frame2[i]) + Math.abs(frame1[i+1] - frame2[i+1]) + Math.abs(frame1[i+2] - frame2[i+2]);
+                        const d23 = Math.abs(frame2[i] - frame3[i]) + Math.abs(frame2[i+1] - frame3[i+1]) + Math.abs(frame2[i+2] - frame3[i+2]);
+                        borderTotal++;
+                        if (d12 <= 1) borderZero12++;
+                        if (d23 <= 1) borderZero23++;
+                    }
+                }
+                const staticRatio = Math.max(borderZero12, borderZero23) / borderTotal;
+                if (staticRatio > 0.90) flags.push('static');
+
+                // Check 2: Background blur detection — compare sharpness of border vs center
+                const laplacian = (data, x0, y0, x1, y1) => {
+                    let sum = 0, count = 0;
+                    for (let y = y0; y < y1; y += 3) {
+                        for (let x = x0; x < x1; x += 3) {
+                            if (x < 1 || y < 1 || x >= w - 1 || y >= h - 1) continue;
+                            const ci = (y * w + x) * 4;
+                            const gray = frame2[ci] * 0.299 + frame2[ci+1] * 0.587 + frame2[ci+2] * 0.114;
+                            const up = frame2[((y-1)*w+x)*4] * 0.299 + frame2[((y-1)*w+x)*4+1] * 0.587 + frame2[((y-1)*w+x)*4+2] * 0.114;
+                            const dn = frame2[((y+1)*w+x)*4] * 0.299 + frame2[((y+1)*w+x)*4+1] * 0.587 + frame2[((y+1)*w+x)*4+2] * 0.114;
+                            const lt = frame2[(y*w+x-1)*4] * 0.299 + frame2[(y*w+x-1)*4+1] * 0.587 + frame2[(y*w+x-1)*4+2] * 0.114;
+                            const rt = frame2[(y*w+x+1)*4] * 0.299 + frame2[(y*w+x+1)*4+1] * 0.587 + frame2[(y*w+x+1)*4+2] * 0.114;
+                            sum += Math.abs(up + dn + lt + rt - 4 * gray);
+                            count++;
+                        }
+                    }
+                    return count > 0 ? sum / count : 0;
+                };
+
+                const centerSharpness = laplacian(frame2, Math.floor(w*0.3), Math.floor(h*0.2), Math.floor(w*0.7), Math.floor(h*0.8));
+                const borderSharpness = (
+                    laplacian(frame2, 0, 0, edgeW, h) +
+                    laplacian(frame2, w - edgeW, 0, w, h) +
+                    laplacian(frame2, edgeW, 0, w - edgeW, topH)
+                ) / 3;
+
+                if (centerSharpness > 0 && borderSharpness > 0) {
+                    const blurRatio = borderSharpness / centerSharpness;
+                    if (blurRatio < 0.20) { resolve(true); return; }
+                    if (blurRatio < 0.35) flags.push('blur');
+                }
+
+                // Check 3: Segmentation halo — soft edges from virtual BG blending
+                let softEdges = 0, sharpEdges = 0;
+                for (let y = Math.floor(h*0.15); y < Math.floor(h*0.85); y += 5) {
+                    const grads = [];
+                    for (let x = 1; x < w-1; x++) {
+                        const iL = (y*w+x-1)*4, iR = (y*w+x+1)*4;
+                        const gL = frame2[iL]*0.299 + frame2[iL+1]*0.587 + frame2[iL+2]*0.114;
+                        const gR = frame2[iR]*0.299 + frame2[iR+1]*0.587 + frame2[iR+2]*0.114;
+                        grads[x] = Math.abs(gR - gL);
+                    }
+                    for (let x = 10; x < w-10; x++) {
+                        if (grads[x] < 15) continue;
+                        let isPeak = true;
+                        for (let dx = -3; dx <= 3; dx++) {
+                            if (dx === 0) continue;
+                            if (grads[x+dx] !== undefined && grads[x+dx] > grads[x]) { isPeak = false; break; }
+                        }
+                        if (!isPeak) continue;
+                        const thr = grads[x] * 0.3;
+                        let edgeWidth = 0;
+                        for (let dx = -15; dx <= 15; dx++) {
+                            if (grads[x+dx] !== undefined && grads[x+dx] > thr) edgeWidth++;
+                        }
+                        if (edgeWidth >= 8) softEdges++; else sharpEdges++;
+                        x += 15;
+                    }
+                }
+                const totalEdges = softEdges + sharpEdges;
+                const softRatio = totalEdges > 0 ? softEdges / totalEdges : 0;
+                if (softRatio > 0.76) flags.push('halo');
+
+                // Check 4: Color blend artifacts at transitions
+                let blendCount = 0, transCount = 0;
+                for (let y = Math.floor(h*0.2); y < Math.floor(h*0.8); y += 8) {
+                    for (let x = 10; x < w-10; x++) {
+                        const iC = (y*w+x)*4, iL = (y*w+x-5)*4, iR = (y*w+x+5)*4;
+                        const gC = frame2[iC]*0.299 + frame2[iC+1]*0.587 + frame2[iC+2]*0.114;
+                        const gL = frame2[iL]*0.299 + frame2[iL+1]*0.587 + frame2[iL+2]*0.114;
+                        const gR = frame2[iR]*0.299 + frame2[iR+1]*0.587 + frame2[iR+2]*0.114;
+                        if (Math.abs(gL - gR) < 20) continue;
+                        transCount++;
+                        if (Math.abs(gC - (gL+gR)/2) < 8) blendCount++;
+                        x += 5;
+                    }
+                }
+                const blendRatio = transCount > 0 ? blendCount / transCount : 0;
+                if (blendRatio > 0.55) flags.push('blend');
+
+                // Instant block: strong halo + blend together
+                if (softRatio > 0.78 && blendRatio > 0.58) { resolve(true); return; }
+
+                resolve(flags.length >= 2);
+            }, 150);
+        }, 150);
+    });
+}
+
 async function verifyAndPunch() {
     faceVerifying.value = true;
     faceError.value = '';
 
-    const image = capturePunchFrame();
-    if (!image) {
+    const filterDetected = await detectBackgroundFilter(punchVideoRef.value);
+    if (filterDetected) {
+        faceError.value = 'Background filter detected. Please disable any virtual background, blur, or camera filters and try again.';
+        faceVerifying.value = false;
+        return;
+    }
+
+    const images = [];
+    for (let i = 0; i < 3; i++) {
+        const frame = capturePunchFrame();
+        if (frame) images.push(frame);
+        if (i < 2) await new Promise(r => setTimeout(r, 300));
+    }
+    if (!images.length) {
         faceError.value = 'Could not capture image. Please try again.';
         faceVerifying.value = false;
         return;
@@ -297,7 +481,7 @@ async function verifyAndPunch() {
 
     let verified = false;
     try {
-        const { data } = await axios.post('/api/face/verify', { image });
+        const { data } = await axios.post('/api/face/verify', { images });
         verified = !!data.verified;
         if (!verified) {
             faceError.value = data.error || 'Face not recognized. Please try again.';
@@ -307,9 +491,27 @@ async function verifyAndPunch() {
     }
 
     if (verified) {
-        faceVerified.value = true;
         faceVerifying.value = false;
-        await executePunch();
+        faceAnalyzing.value = true;
+        faceAnalyzePhase.value = 0;
+        analyzeInterval = setInterval(() => {
+            faceAnalyzePhase.value++;
+        }, 1400);
+
+        delayPunchSuccess = true;
+        await Promise.all([
+            executePunch(),
+            new Promise(r => setTimeout(r, 10000)),
+        ]);
+        delayPunchSuccess = false;
+
+        clearInterval(analyzeInterval);
+        analyzeInterval = null;
+        faceAnalyzing.value = false;
+        faceVerified.value = true;
+        punchSuccess.value = true;
+        startFaceMetrics();
+        startContinuousUpload(punchSuccessType.value, punchSuccessLogId);
         return;
     }
 
@@ -362,7 +564,11 @@ async function executePunch() {
 
         punchSuccessLogId = logId;
         punchSuccessType.value = type;
-        punchSuccess.value = true;
+        if (!delayPunchSuccess) {
+            punchSuccess.value = true;
+            startFaceMetrics();
+            startContinuousUpload(type, logId);
+        }
     } catch (e) {
         const type = wasPunchedIn ? 'punch_out' : 'punch_in';
         for (const entry of clips) {
@@ -376,6 +582,9 @@ async function executePunch() {
 }
 
 async function closeSuccessModal() {
+    stopFaceMetrics();
+    stopContinuousUpload();
+
     const clip = punchRecordingActive ? await stopPunchRecording() : null;
     punchRecordingActive = false;
 
@@ -385,6 +594,34 @@ async function closeSuccessModal() {
 
     stopPunchCam();
     showPunchModal.value = false;
+}
+
+function startFaceMetrics() {
+    faceMetricsPhase.value = 0;
+    metricsInterval = setInterval(() => {
+        faceMetricsPhase.value = (faceMetricsPhase.value + 1) % faceMetricsLabels.length;
+    }, 3000);
+}
+
+function stopFaceMetrics() {
+    if (metricsInterval) { clearInterval(metricsInterval); metricsInterval = null; }
+}
+
+function startContinuousUpload(type, logId) {
+    continuousUploadInterval = setInterval(async () => {
+        if (!punchRecordingActive) return;
+        const clip = await stopPunchRecording();
+        punchRecordingActive = false;
+        if (clip) {
+            queueVideoUpload(clip, type, logId, true);
+        }
+        startPunchRecording();
+        punchRecordingActive = true;
+    }, 10000);
+}
+
+function stopContinuousUpload() {
+    if (continuousUploadInterval) { clearInterval(continuousUploadInterval); continuousUploadInterval = null; }
 }
 
 // --- URL Checker ---
@@ -940,8 +1177,26 @@ onMounted(() => {
     }
 });
 
+function handleBeforeUnload() {
+    stopFaceMetrics();
+    stopContinuousUpload();
+    if (punchRecordingActive) {
+        const recorder = punchVideoRef.value?.srcObject;
+        if (recorder) {
+            stopPunchRecording().then(clip => {
+                if (clip) queueVideoUpload(clip, punchSuccessType.value, punchSuccessLogId, true);
+            });
+        }
+    }
+}
+
+window.addEventListener('beforeunload', handleBeforeUnload);
+
 onUnmounted(() => {
     stopClock();
+    stopFaceMetrics();
+    stopContinuousUpload();
+    window.removeEventListener('beforeunload', handleBeforeUnload);
     if (props.auth.user?.id && window.Echo) {
         window.Echo.leaveChannel(`private-messages.${props.auth.user.id}`);
     }
@@ -2182,10 +2437,10 @@ onUnmounted(() => {
 
         <!-- Punch In/Out Modal -->
         <Teleport to="body">
-            <div v-if="showPunchModal" class="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 backdrop-blur-sm" @click.self="closePunchModal();">
+            <div v-if="showPunchModal" class="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 backdrop-blur-sm" @click.self="!faceAnalyzing && closePunchModal();">
                 <div class="bg-surface-900 border border-surface-700/50 rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
                     <!-- Header -->
-                    <div v-if="!punchSuccess" class="px-6 py-4 border-b border-surface-800/50 flex items-center justify-between">
+                    <div v-if="!punchSuccess && !faceAnalyzing" class="px-6 py-4 border-b border-surface-800/50 flex items-center justify-between">
                         <div>
                             <h3 class="text-base font-semibold text-surface-100">{{ isPunchedIn ? 'Punch Out' : 'Punch In' }}</h3>
                             <p class="text-xs text-surface-500 mt-0.5">
@@ -2269,7 +2524,7 @@ onUnmounted(() => {
 
                     <!-- Body: Face Verification Step -->
                     <div v-if="punchStep === 'face' && !punchSuccess" class="px-6 py-5">
-                        <div v-if="punchCamError" class="text-center py-6">
+                        <div v-if="punchCamError && !faceAnalyzing" class="text-center py-6">
                             <div class="w-12 h-12 rounded-full bg-red-500/10 flex items-center justify-center mx-auto mb-3">
                                 <svg class="w-6 h-6 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
                                     <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
@@ -2279,6 +2534,45 @@ onUnmounted(() => {
                             <button @click="startPunchCam" class="btn-secondary text-xs px-4 py-2">Try Again</button>
                         </div>
 
+                        <!-- Analyzing phase (10s fake processing after API verified) -->
+                        <div v-else-if="faceAnalyzing">
+                            <div class="relative rounded-xl overflow-hidden bg-black mb-4">
+                                <video ref="punchVideoRef" class="w-full" autoplay playsinline muted></video>
+                                <div class="absolute inset-0 pointer-events-none overflow-hidden">
+                                    <!-- Scanning circle -->
+                                    <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-44 h-44 sm:w-52 sm:h-52">
+                                        <div class="absolute inset-0 rounded-full border-2 border-cyan-400/40 animate-pulse"></div>
+                                        <div class="absolute inset-[-8px] rounded-full border border-cyan-400/20 animate-spin" style="animation-duration:4s;border-top-color:rgb(34 211 238 / 0.6);"></div>
+                                    </div>
+                                    <!-- Scan line -->
+                                    <div class="absolute left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-cyan-400/60 to-transparent animate-scan-line"></div>
+                                    <!-- Corner markers -->
+                                    <div class="absolute top-3 left-3 w-6 h-6 border-t-2 border-l-2 border-cyan-400/50"></div>
+                                    <div class="absolute top-3 right-3 w-6 h-6 border-t-2 border-r-2 border-cyan-400/50"></div>
+                                    <div class="absolute bottom-3 left-3 w-6 h-6 border-b-2 border-l-2 border-cyan-400/50"></div>
+                                    <div class="absolute bottom-3 right-3 w-6 h-6 border-b-2 border-r-2 border-cyan-400/50"></div>
+                                    <!-- Crosshair dots on face -->
+                                    <div class="absolute top-[35%] left-[38%] w-1.5 h-1.5 rounded-full bg-cyan-400/70 animate-pulse"></div>
+                                    <div class="absolute top-[35%] left-[58%] w-1.5 h-1.5 rounded-full bg-cyan-400/70 animate-pulse" style="animation-delay:0.3s;"></div>
+                                    <div class="absolute top-[50%] left-[48%] w-1.5 h-1.5 rounded-full bg-cyan-400/70 animate-pulse" style="animation-delay:0.6s;"></div>
+                                    <div class="absolute top-[60%] left-[48%] w-1 h-3 rounded-full bg-cyan-400/30 animate-pulse" style="animation-delay:0.9s;"></div>
+                                </div>
+                                <!-- Status overlay -->
+                                <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-surface-950/95 to-transparent p-4 pointer-events-none">
+                                    <div class="flex items-center gap-2.5">
+                                        <div class="w-4 h-4 border-2 border-cyan-400/30 border-t-cyan-400 rounded-full animate-spin"></div>
+                                        <p class="text-xs font-medium text-cyan-300 transition-all duration-500">{{ faceAnalyzeLabels[Math.min(faceAnalyzePhase, faceAnalyzeLabels.length - 1)] }}</p>
+                                    </div>
+                                    <!-- Progress bar -->
+                                    <div class="mt-2 h-1 bg-surface-800 rounded-full overflow-hidden">
+                                        <div class="h-full bg-gradient-to-r from-cyan-500 to-brand rounded-full transition-all duration-1000 ease-linear" :style="{ width: Math.min((faceAnalyzePhase + 1) / faceAnalyzeLabels.length * 100, 100) + '%' }"></div>
+                                    </div>
+                                </div>
+                            </div>
+                            <p class="text-[10px] text-surface-500 text-center">Please keep looking at the camera. Do not move.</p>
+                        </div>
+
+                        <!-- Normal face verify UI -->
                         <div v-else>
                             <div class="relative rounded-xl overflow-hidden bg-black mb-4">
                                 <video ref="punchVideoRef" class="w-full" autoplay playsinline muted></video>
@@ -2316,7 +2610,7 @@ onUnmounted(() => {
                     </div>
 
                     <!-- Footer -->
-                    <div class="px-6 py-4 border-t border-surface-800/50 flex items-center justify-end gap-3">
+                    <div v-if="!faceAnalyzing" class="px-6 py-4 border-t border-surface-800/50 flex items-center justify-end gap-3">
                         <template v-if="punchSuccess">
                             <button @click="closeSuccessModal" class="px-5 py-2.5 rounded-xl text-xs font-semibold transition-all duration-200 bg-surface-700 text-surface-200 hover:bg-surface-600 active:scale-95">
                                 Close

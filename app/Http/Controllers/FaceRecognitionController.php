@@ -60,35 +60,282 @@ class FaceRecognitionController extends Controller
     public function verify(Request $request, DeepStackService $deepstack)
     {
         $request->validate([
-            'image' => 'required|string|max:5000000',
+            'images' => 'required|array|min:1|max:3',
+            'images.*' => 'required|string|max:5000000',
         ]);
 
         $user = auth()->user();
-        $minConfidence = config('deepstack.min_confidence');
+        $minConfidence = max(config('deepstack.min_confidence') - 0.15, 0.40);
         $expectedUserId = "tenant_{$user->tenant_id}_user_{$user->id}";
+        $tenantPrefix = "tenant_{$user->tenant_id}_";
 
-        $result = $deepstack->recognizeFace($request->image);
-
-        if (!$result['success']) {
-            return response()->json([
-                'verified' => false,
-                'error' => 'Face recognition service is temporarily unavailable.',
-            ], 503);
-        }
-
-        foreach ($result['predictions'] ?? [] as $prediction) {
-            if ($prediction['userid'] === $expectedUserId && $prediction['confidence'] >= $minConfidence) {
+        if (count($request->images) >= 2) {
+            $filterDetected = $this->detectFilterServerSide($request->images[0], $request->images[count($request->images) - 1]);
+            if ($filterDetected) {
                 return response()->json([
-                    'verified' => true,
-                    'confidence' => round($prediction['confidence'], 4),
+                    'verified' => false,
+                    'error' => 'Background filter detected. Please disable any virtual background, blur, or camera filters and try again.',
                 ]);
             }
         }
 
+        $bestConfidence = 0;
+        $bestMatchUserId = null;
+        $faceDetected = false;
+
+        foreach ($request->images as $image) {
+            $result = $deepstack->recognizeFace($image);
+
+            if (!$result['success']) continue;
+
+            foreach ($result['predictions'] ?? [] as $prediction) {
+                if (!str_starts_with($prediction['userid'], $tenantPrefix)) continue;
+
+                $faceDetected = true;
+
+                if ($prediction['userid'] === $expectedUserId && $prediction['confidence'] >= $minConfidence) {
+                    return response()->json([
+                        'verified' => true,
+                        'confidence' => round($prediction['confidence'], 4),
+                    ]);
+                }
+
+                if ($prediction['confidence'] > $bestConfidence) {
+                    $bestConfidence = $prediction['confidence'];
+                    $bestMatchUserId = $prediction['userid'];
+                }
+            }
+        }
+
+        if (!$faceDetected) {
+            return response()->json([
+                'verified' => false,
+                'error' => 'No face detected. Please ensure your face is clearly visible and well-lit.',
+            ]);
+        }
+
+        if ($bestMatchUserId === $expectedUserId && $bestConfidence > 0) {
+            return response()->json([
+                'verified' => false,
+                'error' => 'Face recognized but confidence too low (' . round($bestConfidence * 100) . '%). Move closer and ensure good lighting.',
+            ]);
+        }
+
         return response()->json([
             'verified' => false,
-            'error' => 'Face not recognized. Please try again with better lighting.',
+            'error' => 'Face did not match your profile. Please re-enroll your face from Profile settings.',
         ]);
+    }
+
+    private function detectFilterServerSide(string $base64First, string $base64Last): bool
+    {
+        $img1 = $this->base64ToGdImage($base64First);
+        $img2 = $this->base64ToGdImage($base64Last);
+
+        if (!$img1 || !$img2) return false;
+
+        $w = min(imagesx($img1), imagesx($img2));
+        $h = min(imagesy($img1), imagesy($img2));
+
+        $edgeW = (int) ($w * 0.15);
+        $topH = (int) ($h * 0.20);
+        $step = 3;
+
+        // Check 1: Temporal stability in border regions
+        $borderTotal = 0;
+        $borderStatic = 0;
+        for ($y = 0; $y < $h; $y += $step) {
+            for ($x = 0; $x < $w; $x += $step) {
+                if ($x >= $edgeW && $x < $w - $edgeW && $y >= $topH) continue;
+                $c1 = imagecolorat($img1, $x, $y);
+                $c2 = imagecolorat($img2, $x, $y);
+                $diff = abs((($c1 >> 16) & 0xFF) - (($c2 >> 16) & 0xFF))
+                      + abs((($c1 >> 8) & 0xFF) - (($c2 >> 8) & 0xFF))
+                      + abs(($c1 & 0xFF) - ($c2 & 0xFF));
+                $borderTotal++;
+                if ($diff <= 2) $borderStatic++;
+            }
+        }
+        $staticRatio = $borderTotal > 0 ? $borderStatic / $borderTotal : 0;
+
+        // Check 2: Border sharpness vs center sharpness (blur detection)
+        $borderSharpness = $this->regionSharpness($img2, 0, 0, $edgeW, $h, $step)
+                         + $this->regionSharpness($img2, $w - $edgeW, 0, $w, $h, $step);
+        $borderSharpness /= 2;
+        $centerSharpness = $this->regionSharpness($img2, (int)($w*0.3), (int)($h*0.2), (int)($w*0.7), (int)($h*0.8), $step);
+        $blurRatio = ($centerSharpness > 0) ? $borderSharpness / $centerSharpness : 1;
+
+        // Check 3: Color uniformity in far edges
+        $edgeVar = ($this->regionColorVariance($img2, 0, 0, (int)($w*0.08), $h, $step)
+                  + $this->regionColorVariance($img2, (int)($w*0.92), 0, $w, $h, $step)) / 2;
+
+        // Check 4: Segmentation halo — soft edges from virtual BG blending
+        $softEdgeRatio = $this->detectSoftEdges($img2);
+
+        // Check 5: Color blend artifacts — linear interpolation at transitions
+        $blendRatio2 = $this->detectBlendArtifacts($img2);
+
+        imagedestroy($img1);
+        imagedestroy($img2);
+
+        // Strong blur = definite filter
+        if ($blurRatio < 0.20) return true;
+
+        // Segmentation halo = definite virtual background
+        if ($softEdgeRatio > 0.78 && $blendRatio2 > 0.58) return true;
+
+        // Otherwise need 2 out of 5 signals
+        $flags = 0;
+        if ($staticRatio > 0.88) $flags++;
+        if ($blurRatio < 0.35) $flags++;
+        if ($edgeVar < 12) $flags++;
+        if ($softEdgeRatio > 0.76) $flags++;
+        if ($blendRatio2 > 0.55) $flags++;
+
+        return $flags >= 2;
+    }
+
+    private function base64ToGdImage(string $base64): ?\GdImage
+    {
+        if (str_contains($base64, ',')) {
+            $base64 = explode(',', $base64, 2)[1];
+        }
+        $data = base64_decode($base64, true);
+        if (!$data) return null;
+        $img = @imagecreatefromstring($data);
+        return $img ?: null;
+    }
+
+    private function regionSharpness(\GdImage $img, int $x0, int $y0, int $x1, int $y1, int $step): float
+    {
+        $w = imagesx($img);
+        $h = imagesy($img);
+        $sum = 0;
+        $count = 0;
+        for ($y = max($y0, 1); $y < min($y1, $h - 1); $y += $step) {
+            for ($x = max($x0, 1); $x < min($x1, $w - 1); $x += $step) {
+                $c = imagecolorat($img, $x, $y);
+                $gray = (($c >> 16) & 0xFF) * 0.299 + (($c >> 8) & 0xFF) * 0.587 + ($c & 0xFF) * 0.114;
+
+                $up = imagecolorat($img, $x, $y - 1);
+                $dn = imagecolorat($img, $x, $y + 1);
+                $lt = imagecolorat($img, $x - 1, $y);
+                $rt = imagecolorat($img, $x + 1, $y);
+
+                $gUp = (($up >> 16) & 0xFF) * 0.299 + (($up >> 8) & 0xFF) * 0.587 + ($up & 0xFF) * 0.114;
+                $gDn = (($dn >> 16) & 0xFF) * 0.299 + (($dn >> 8) & 0xFF) * 0.587 + ($dn & 0xFF) * 0.114;
+                $gLt = (($lt >> 16) & 0xFF) * 0.299 + (($lt >> 8) & 0xFF) * 0.587 + ($lt & 0xFF) * 0.114;
+                $gRt = (($rt >> 16) & 0xFF) * 0.299 + (($rt >> 8) & 0xFF) * 0.587 + ($rt & 0xFF) * 0.114;
+
+                $sum += abs($gUp + $gDn + $gLt + $gRt - 4 * $gray);
+                $count++;
+            }
+        }
+        return $count > 0 ? $sum / $count : 0;
+    }
+
+    private function detectSoftEdges(\GdImage $img): float
+    {
+        $w = imagesx($img);
+        $h = imagesy($img);
+        $softEdges = 0;
+        $sharpEdges = 0;
+
+        for ($y = (int)($h * 0.15); $y < (int)($h * 0.85); $y += 5) {
+            $grads = [];
+            for ($x = 1; $x < $w - 1; $x++) {
+                $gl = $this->grayAt($img, $x - 1, $y);
+                $gr = $this->grayAt($img, $x + 1, $y);
+                $grads[$x] = abs($gr - $gl);
+            }
+
+            for ($x = 10; $x < $w - 10; $x++) {
+                if ($grads[$x] < 15) continue;
+                $isPeak = true;
+                for ($dx = -3; $dx <= 3; $dx++) {
+                    if ($dx === 0) continue;
+                    if (isset($grads[$x + $dx]) && $grads[$x + $dx] > $grads[$x]) {
+                        $isPeak = false;
+                        break;
+                    }
+                }
+                if (!$isPeak) continue;
+
+                $threshold = $grads[$x] * 0.3;
+                $width = 0;
+                for ($dx = -15; $dx <= 15; $dx++) {
+                    if (isset($grads[$x + $dx]) && $grads[$x + $dx] > $threshold) $width++;
+                }
+
+                if ($width >= 8) $softEdges++;
+                else $sharpEdges++;
+
+                $x += 15;
+            }
+        }
+
+        $total = $softEdges + $sharpEdges;
+        return $total > 0 ? $softEdges / $total : 0;
+    }
+
+    private function detectBlendArtifacts(\GdImage $img): float
+    {
+        $w = imagesx($img);
+        $h = imagesy($img);
+        $blendArtifacts = 0;
+        $transitionChecks = 0;
+
+        for ($y = (int)($h * 0.2); $y < (int)($h * 0.8); $y += 8) {
+            for ($x = 10; $x < $w - 10; $x++) {
+                $gc = $this->grayAt($img, $x, $y);
+                $g5l = $this->grayAt($img, $x - 5, $y);
+                $g5r = $this->grayAt($img, $x + 5, $y);
+
+                if (abs($g5l - $g5r) < 20) continue;
+
+                $transitionChecks++;
+                $expectedBlend = ($g5l + $g5r) / 2;
+                if (abs($gc - $expectedBlend) < 8) $blendArtifacts++;
+
+                $x += 5;
+            }
+        }
+
+        return $transitionChecks > 0 ? $blendArtifacts / $transitionChecks : 0;
+    }
+
+    private function grayAt(\GdImage $img, int $x, int $y): float
+    {
+        $c = imagecolorat($img, $x, $y);
+        return (($c >> 16) & 0xFF) * 0.299 + (($c >> 8) & 0xFF) * 0.587 + ($c & 0xFF) * 0.114;
+    }
+
+    private function regionColorVariance(\GdImage $img, int $x0, int $y0, int $x1, int $y1, int $step): float
+    {
+        $w = imagesx($img);
+        $h = imagesy($img);
+        $sr = 0; $sg = 0; $sb = 0; $n = 0;
+        for ($y = $y0; $y < min($y1, $h); $y += $step) {
+            for ($x = $x0; $x < min($x1, $w); $x += $step) {
+                $c = imagecolorat($img, $x, $y);
+                $sr += ($c >> 16) & 0xFF;
+                $sg += ($c >> 8) & 0xFF;
+                $sb += $c & 0xFF;
+                $n++;
+            }
+        }
+        if ($n === 0) return 999;
+        $mr = $sr / $n; $mg = $sg / $n; $mb = $sb / $n;
+        $vr = 0; $vg = 0; $vb = 0;
+        for ($y = $y0; $y < min($y1, $h); $y += $step) {
+            for ($x = $x0; $x < min($x1, $w); $x += $step) {
+                $c = imagecolorat($img, $x, $y);
+                $vr += ((($c >> 16) & 0xFF) - $mr) ** 2;
+                $vg += ((($c >> 8) & 0xFF) - $mg) ** 2;
+                $vb += (($c & 0xFF) - $mb) ** 2;
+            }
+        }
+        return sqrt(($vr + $vg + $vb) / (3 * $n));
     }
 
     public function uploadVideo(Request $request)
@@ -194,6 +441,7 @@ class FaceRecognitionController extends Controller
                 'type' => $v->type,
                 'time_log_id' => $v->time_log_id,
                 'verified' => (bool) $v->verified,
+                'starred' => (bool) $v->starred,
                 'created_at' => $v->created_at->toIso8601String(),
             ]);
 
@@ -221,6 +469,14 @@ class FaceRecognitionController extends Controller
         return response()->file($path, [
             'Content-Type' => 'video/webm',
         ]);
+    }
+
+    public function toggleStarVideo(Request $request, int $id)
+    {
+        $video = FaceVideo::findOrFail($id);
+        $video->update(['starred' => !$video->starred]);
+
+        return response()->json(['starred' => (bool) $video->starred]);
     }
 
     public function faceLogin(Request $request, DeepStackService $deepstack)

@@ -506,6 +506,14 @@ function closeFailedAttemptPopup() {
     failedAttemptPopup.value = null;
 }
 
+async function toggleVideoStar(videoId) {
+    try {
+        const { data } = await axios.post(`/api/admin/face-videos/${videoId}/star`);
+        const vid = memberFaceVideos.value.find(v => v.id === videoId);
+        if (vid) vid.starred = data.starred;
+    } catch {}
+}
+
 const enrollmentVideos = computed(() => memberFaceVideos.value.filter(v => v.type === 'enrollment').sort((a, b) => new Date(b.created_at) - new Date(a.created_at)));
 const enrollmentVideo = computed(() => enrollmentVideos.value[0]);
 const showEnrollmentHistory = ref(false);
@@ -1999,7 +2007,8 @@ onUnmounted(() => {
                                                     <svg class="w-3.5 h-3.5 text-surface-500 transition-transform" :class="showFailedAttempts ? 'rotate-180' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5"/></svg>
                                                 </button>
                                                 <div v-if="showFailedAttempts" class="mt-2 space-y-1.5">
-                                                    <div v-for="fv in selectedDayFailedVideos" :key="fv.id" class="flex items-center gap-2 sm:gap-3 text-xs p-2.5 sm:p-3 rounded-lg bg-surface-900/50 border border-red-500/10">
+                                                    <div v-for="(fv, fvi) in selectedDayFailedVideos" :key="fv.id" class="flex items-center gap-2 sm:gap-3 text-xs p-2.5 sm:p-3 rounded-lg bg-surface-900/50 border" :class="fv.starred ? 'border-yellow-500/30' : 'border-red-500/10'">
+                                                        <span class="inline-flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-bold bg-red-400/15 text-red-400">{{ fvi + 1 }}</span>
                                                         <span class="text-[9px] px-1.5 py-0.5 rounded font-medium bg-red-500/10 text-red-400">
                                                             {{ fv.type === 'punch_in' ? 'In' : 'Out' }}
                                                         </span>
@@ -2007,10 +2016,15 @@ onUnmounted(() => {
                                                         <button @click="openFailedAttemptVideo(fv)" class="p-0.5 rounded text-red-400/70 hover:text-red-400 transition-colors" title="Watch video">
                                                             <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z"/></svg>
                                                         </button>
-                                                        <span class="inline-flex items-center gap-0.5 text-[9px] text-red-400/60 ml-auto">
-                                                            <svg class="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12"/></svg>
-                                                            Failed
-                                                        </span>
+                                                        <div class="flex items-center gap-1.5 ml-auto">
+                                                            <button @click="toggleVideoStar(fv.id)" class="p-0.5 rounded transition-colors" :class="fv.starred ? 'text-yellow-400' : 'text-surface-600 hover:text-yellow-400'" :title="fv.starred ? 'Unstar' : 'Star'">
+                                                                <svg class="w-3.5 h-3.5" :fill="fv.starred ? 'currentColor' : 'none'" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M11.48 3.499a.562.562 0 011.04 0l2.125 5.111a.563.563 0 00.475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 00-.182.557l1.285 5.385a.562.562 0 01-.84.61l-4.725-2.885a.562.562 0 00-.586 0L6.982 20.54a.562.562 0 01-.84-.61l1.285-5.386a.562.562 0 00-.182-.557l-4.204-3.602a.562.562 0 01.321-.988l5.518-.442a.563.563 0 00.475-.345L11.48 3.5z"/></svg>
+                                                            </button>
+                                                            <span class="inline-flex items-center gap-0.5 text-[9px] text-red-400/60">
+                                                                <svg class="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12"/></svg>
+                                                                Failed
+                                                            </span>
+                                                        </div>
                                                     </div>
                                                 </div>
                                             </div>
@@ -2062,7 +2076,7 @@ onUnmounted(() => {
                                 <div v-for="(vid, vi) in sessionVideoPopup.videos" :key="vid.id" class="border-b border-surface-800/30 last:border-0">
                                     <div class="px-5 pt-3 pb-1 flex items-center justify-between">
                                         <div class="flex items-center gap-2">
-                                            <span class="text-[10px] font-mono text-surface-500">Attempt {{ vi + 1 }}</span>
+                                            <span class="inline-flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-bold" :class="vid.verified ? 'bg-emerald-400/15 text-emerald-400' : 'bg-red-400/15 text-red-400'">{{ vi + 1 }}</span>
                                             <span v-if="vid.verified" class="inline-flex items-center gap-1 text-[10px] font-medium text-emerald-400 bg-emerald-400/10 px-1.5 py-0.5 rounded">
                                                 <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="m4.5 12.75 6 6 9-13.5"/></svg>
                                                 Verified
@@ -2072,7 +2086,12 @@ onUnmounted(() => {
                                                 Failed
                                             </span>
                                         </div>
-                                        <span class="text-[10px] text-surface-600">{{ new Date(vid.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) }}</span>
+                                        <div class="flex items-center gap-2">
+                                            <button @click="toggleVideoStar(vid.id)" class="p-1 rounded transition-colors" :class="vid.starred ? 'text-yellow-400' : 'text-surface-600 hover:text-yellow-400'" :title="vid.starred ? 'Unstar' : 'Star'">
+                                                <svg class="w-4 h-4" :fill="vid.starred ? 'currentColor' : 'none'" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M11.48 3.499a.562.562 0 011.04 0l2.125 5.111a.563.563 0 00.475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 00-.182.557l1.285 5.385a.562.562 0 01-.84.61l-4.725-2.885a.562.562 0 00-.586 0L6.982 20.54a.562.562 0 01-.84-.61l1.285-5.386a.562.562 0 00-.182-.557l-4.204-3.602a.562.562 0 01.321-.988l5.518-.442a.563.563 0 00.475-.345L11.48 3.5z"/></svg>
+                                            </button>
+                                            <span class="text-[10px] text-surface-600">{{ new Date(vid.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) }}</span>
+                                        </div>
                                     </div>
                                     <div class="px-5 pb-3">
                                         <video :src="`/api/face/video/${vid.id}`" controls preload="metadata" class="w-full rounded-lg bg-black mt-1"></video>
@@ -2100,12 +2119,17 @@ onUnmounted(() => {
                                 </button>
                             </div>
                             <div class="p-5">
-                                <div class="flex items-center gap-2 mb-3">
-                                    <span class="inline-flex items-center gap-1 text-[10px] font-medium text-red-400 bg-red-400/10 px-1.5 py-0.5 rounded">
-                                        <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12"/></svg>
-                                        Not Verified
-                                    </span>
-                                    <span class="text-[10px] text-surface-600">{{ new Date(failedAttemptPopup.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) }}</span>
+                                <div class="flex items-center justify-between mb-3">
+                                    <div class="flex items-center gap-2">
+                                        <span class="inline-flex items-center gap-1 text-[10px] font-medium text-red-400 bg-red-400/10 px-1.5 py-0.5 rounded">
+                                            <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12"/></svg>
+                                            Not Verified
+                                        </span>
+                                        <span class="text-[10px] text-surface-600">{{ new Date(failedAttemptPopup.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) }}</span>
+                                    </div>
+                                    <button @click="toggleVideoStar(failedAttemptPopup.id)" class="p-1 rounded transition-colors" :class="failedAttemptPopup.starred ? 'text-yellow-400' : 'text-surface-600 hover:text-yellow-400'" :title="failedAttemptPopup.starred ? 'Unstar' : 'Star'">
+                                        <svg class="w-4 h-4" :fill="failedAttemptPopup.starred ? 'currentColor' : 'none'" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M11.48 3.499a.562.562 0 011.04 0l2.125 5.111a.563.563 0 00.475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 00-.182.557l1.285 5.385a.562.562 0 01-.84.61l-4.725-2.885a.562.562 0 00-.586 0L6.982 20.54a.562.562 0 01-.84-.61l1.285-5.386a.562.562 0 00-.182-.557l-4.204-3.602a.562.562 0 01.321-.988l5.518-.442a.563.563 0 00.475-.345L11.48 3.5z"/></svg>
+                                    </button>
                                 </div>
                                 <video :src="`/api/face/video/${failedAttemptPopup.id}`" controls autoplay class="w-full rounded-lg bg-black"></video>
                             </div>
