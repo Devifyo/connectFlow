@@ -583,17 +583,20 @@ async function executePunch() {
 
 async function closeSuccessModal() {
     stopFaceMetrics();
-    stopContinuousUpload();
-
-    const clip = punchRecordingActive ? await stopPunchRecording() : null;
-    punchRecordingActive = false;
-
-    if (clip) {
-        queueVideoUpload(clip, punchSuccessType.value, punchSuccessLogId, true);
-    }
-
-    stopPunchCam();
     showPunchModal.value = false;
+}
+
+function stopBackgroundRecording() {
+    stopContinuousUpload();
+    if (punchRecordingActive) {
+        stopPunchRecording().then(clip => {
+            punchRecordingActive = false;
+            if (clip) queueVideoUpload(clip, punchSuccessType.value, punchSuccessLogId, true);
+            stopPunchCam();
+        });
+    } else {
+        stopPunchCam();
+    }
 }
 
 function startFaceMetrics() {
@@ -1178,25 +1181,26 @@ onMounted(() => {
 });
 
 function handleBeforeUnload() {
+    stopBackgroundRecording();
     stopFaceMetrics();
-    stopContinuousUpload();
-    if (punchRecordingActive) {
-        const recorder = punchVideoRef.value?.srcObject;
-        if (recorder) {
-            stopPunchRecording().then(clip => {
-                if (clip) queueVideoUpload(clip, punchSuccessType.value, punchSuccessLogId, true);
-            });
-        }
+}
+
+function handleVisibilityChange() {
+    if (document.hidden && punchRecordingActive && !showPunchModal.value) {
+        stopBackgroundRecording();
+        stopFaceMetrics();
     }
 }
 
 window.addEventListener('beforeunload', handleBeforeUnload);
+document.addEventListener('visibilitychange', handleVisibilityChange);
 
 onUnmounted(() => {
     stopClock();
+    stopBackgroundRecording();
     stopFaceMetrics();
-    stopContinuousUpload();
     window.removeEventListener('beforeunload', handleBeforeUnload);
+    document.removeEventListener('visibilitychange', handleVisibilityChange);
     if (props.auth.user?.id && window.Echo) {
         window.Echo.leaveChannel(`private-messages.${props.auth.user.id}`);
     }
