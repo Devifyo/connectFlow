@@ -43,4 +43,8 @@ return [
         'api_key' => env('ANTHROPIC_API_KEY'),
     ],
 
+    'face_ai' => [
+        'provider' => env('FACE_AI_PROVIDER', 'anthropic'),
+    ],
+
 ];

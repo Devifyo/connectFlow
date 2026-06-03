@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\AiBackgroundLog;
 use App\Models\FaceLoginAttempt;
 use App\Models\FaceVideo;
 use App\Models\Tenant;
@@ -81,9 +82,8 @@ class FaceRecognitionController extends Controller
             }
         }
 
-        $aiResult = $this->analyzeBackgroundWithAI($request->images[0]);
+        $aiResult = $this->analyzeBackgroundWithAI($request->images[0], $user->tenant_id, $user->id, 'verify', $request->ip());
         if ($aiResult && $aiResult['virtual_bg'] === true && ($aiResult['confidence'] ?? 0) >= 0.75) {
-            Log::info("AI background detection blocked verify for user {$user->id}: " . ($aiResult['reason'] ?? 'virtual bg'));
             return response()->json([
                 'verified' => false,
                 'error' => 'Virtual or filtered background detected. Please use a real physical background and try again.',
@@ -216,14 +216,9 @@ class FaceRecognitionController extends Controller
         return $flags >= 2;
     }
 
-    private function analyzeBackgroundWithAI(string $base64Image): ?array
+    private function getBackgroundPrompt(): string
     {
-        $apiKey = config('services.anthropic.api_key');
-        if (!$apiKey) return null;
-
-        $imageData = preg_replace('/^data:image\/\w+;base64,/', '', $base64Image);
-
-        $prompt = 'You are a security system analyzing webcam frames for face verification during employee clock-in. '
+        return 'You are a security system analyzing webcam frames for face verification during employee clock-in. '
             . 'Your job is to detect if the background is REAL and UNMODIFIED or if ANY digital manipulation has been applied. '
             . 'This is captured from a laptop/phone webcam for a workplace punch-in system. '
             . "\n\nFLAG AS VIRTUAL (virtual_bg: true) if ANY of these are detected:\n"
@@ -240,6 +235,100 @@ class FaceRecognitionController extends Controller
             . "\n\nFLAG AS REAL (virtual_bg: false) ONLY if the background is clearly a real, unmodified physical environment with natural detail, texture, and consistent lighting throughout the entire image.\n"
             . 'Be STRICT. When uncertain, lean toward flagging. '
             . 'Reply with ONLY a JSON object: {"virtual_bg": true/false, "confidence": 0.0-1.0, "reason": "brief reason"}';
+    }
+
+    private function analyzeBackgroundWithAI(string $base64Image, ?int $tenantId = null, ?int $userId = null, string $action = 'verify', ?string $ip = null): ?array
+    {
+        try {
+            $provider = config('services.face_ai.provider', 'anthropic');
+
+            $result = ($provider === 'gemini')
+                ? $this->analyzeWithGemini($base64Image)
+                : $this->analyzeWithAnthropic($base64Image);
+
+            $apiFailed = $result === null || isset($result['_error']);
+            $errorMsg = $result['_error'] ?? ($result === null ? 'No response or invalid JSON' : null);
+
+            if ($apiFailed) {
+                $result = null;
+            }
+
+            try {
+                if ($tenantId) {
+                    AiBackgroundLog::create([
+                        'tenant_id' => $tenantId,
+                        'user_id' => $userId,
+                        'provider' => $provider,
+                        'action' => $action,
+                        'virtual_bg_detected' => $result['virtual_bg'] ?? null,
+                        'confidence' => $result['confidence'] ?? null,
+                        'reason' => $result['reason'] ?? null,
+                        'api_failed' => $apiFailed,
+                        'error_message' => $errorMsg,
+                        'ip_address' => $ip,
+                    ]);
+                }
+            } catch (\Throwable $e) {
+                Log::warning('AI background log save failed: ' . $e->getMessage());
+            }
+
+            return $result;
+        } catch (\Throwable $e) {
+            Log::warning('AI background analysis failed entirely: ' . $e->getMessage());
+            return null;
+        }
+    }
+
+    private function analyzeWithGemini(string $base64Image): ?array
+    {
+        $apiKey = config('services.gemini.api_key');
+        if (!$apiKey) return null;
+
+        $imageData = preg_replace('/^data:image\/\w+;base64,/', '', $base64Image);
+
+        try {
+            $response = Http::timeout(10)->post(
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={$apiKey}",
+                [
+                    'contents' => [[
+                        'parts' => [
+                            [
+                                'inlineData' => [
+                                    'mimeType' => 'image/jpeg',
+                                    'data' => $imageData,
+                                ],
+                            ],
+                            [
+                                'text' => $this->getBackgroundPrompt(),
+                            ],
+                        ],
+                    ]],
+                    'generationConfig' => [
+                        'maxOutputTokens' => 500,
+                        'temperature' => 0.1,
+                        'thinkingConfig' => ['thinkingBudget' => 0],
+                    ],
+                ]
+            );
+
+            if ($response->successful()) {
+                $text = $response->json('candidates.0.content.parts.0.text', '');
+                return $this->parseAIResponse($text);
+            }
+        } catch (\Throwable $e) {
+            Log::warning('Gemini background analysis failed: ' . $e->getMessage());
+            return ['_error' => $e->getMessage()];
+        }
+
+        return null;
+    }
+
+    private function analyzeWithAnthropic(string $base64Image): ?array
+    {
+        $apiKey = config('services.anthropic.api_key');
+        if (!$apiKey) return null;
+
+        $imageData = preg_replace('/^data:image\/\w+;base64,/', '', $base64Image);
 
         try {
             $response = Http::timeout(10)->withHeaders([
@@ -262,7 +351,7 @@ class FaceRecognitionController extends Controller
                         ],
                         [
                             'type' => 'text',
-                            'text' => $prompt,
+                            'text' => $this->getBackgroundPrompt(),
                         ],
                     ],
                 ]],
@@ -270,22 +359,29 @@ class FaceRecognitionController extends Controller
 
             if ($response->successful()) {
                 $text = $response->json('content.0.text', '');
-                $text = preg_replace('/^```(?:json)?\s*|\s*```$/m', '', trim($text));
-                $json = json_decode($text, true);
-                if ($json && isset($json['virtual_bg'])) {
-                    return $json;
-                }
-                if (preg_match('/\{[^}]+\}/', $text, $m)) {
-                    $json = json_decode($m[0], true);
-                    if ($json && isset($json['virtual_bg'])) {
-                        return $json;
-                    }
-                }
+                return $this->parseAIResponse($text);
             }
         } catch (\Throwable $e) {
-            Log::warning('AI background analysis failed: ' . $e->getMessage());
+            Log::warning('Anthropic background analysis failed: ' . $e->getMessage());
+            return ['_error' => $e->getMessage()];
         }
 
+        return null;
+    }
+
+    private function parseAIResponse(string $text): ?array
+    {
+        $text = preg_replace('/^```(?:json)?\s*|\s*```$/m', '', trim($text));
+        $json = json_decode($text, true);
+        if ($json && isset($json['virtual_bg'])) {
+            return $json;
+        }
+        if (preg_match('/\{[^}]+\}/', $text, $m)) {
+            $json = json_decode($m[0], true);
+            if ($json && isset($json['virtual_bg'])) {
+                return $json;
+            }
+        }
         return null;
     }
 
@@ -601,9 +697,8 @@ class FaceRecognitionController extends Controller
             return response()->json(['error' => 'Center frame is required.'], 422);
         }
 
-        $aiResult = $this->analyzeBackgroundWithAI($centerFrame['image']);
+        $aiResult = $this->analyzeBackgroundWithAI($centerFrame['image'], null, null, 'face_login', $ip);
         if ($aiResult && $aiResult['virtual_bg'] === true && ($aiResult['confidence'] ?? 0) >= 0.75) {
-            Log::info("AI background detection blocked face login from IP {$ip}: " . ($aiResult['reason'] ?? 'virtual bg'));
             FaceLoginAttempt::create([
                 'ip_address' => $ip,
                 'user_agent' => $ua,
@@ -734,5 +829,30 @@ class FaceRecognitionController extends Controller
             'success' => true,
             'redirect' => route('dashboard'),
         ]);
+    }
+
+    public function aiBackgroundLogs(Request $request)
+    {
+        $user = auth()->user();
+        $logs = AiBackgroundLog::where('tenant_id', $user->tenant_id)
+            ->with('user:id,name')
+            ->orderByDesc('created_at')
+            ->limit(100)
+            ->get()
+            ->map(fn ($log) => [
+                'id' => $log->id,
+                'user_name' => $log->user?->name,
+                'provider' => $log->provider,
+                'action' => $log->action,
+                'virtual_bg_detected' => $log->virtual_bg_detected,
+                'confidence' => $log->confidence,
+                'reason' => $log->reason,
+                'api_failed' => $log->api_failed,
+                'error_message' => $log->error_message,
+                'ip_address' => $log->ip_address,
+                'created_at' => $log->created_at->toISOString(),
+            ]);
+
+        return response()->json(['logs' => $logs]);
     }
 }

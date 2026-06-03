@@ -64,6 +64,7 @@ Route::middleware('auth')->group(function () {
         Route::get('/api/admin/bidders/{id}/attendance', [\App\Http\Controllers\TenantAdminController::class, 'memberAttendance']);
         Route::get('/api/admin/bidders/{id}/face-videos', [\App\Http\Controllers\FaceRecognitionController::class, 'memberVideos']);
         Route::post('/api/admin/face-videos/{id}/star', [\App\Http\Controllers\FaceRecognitionController::class, 'toggleStarVideo']);
+        Route::get('/api/admin/ai-background-logs', [\App\Http\Controllers\FaceRecognitionController::class, 'aiBackgroundLogs']);
         Route::put('/api/admin/bidders/{id}/attendance', [\App\Http\Controllers\TenantAdminController::class, 'updateDayStatus']);
         Route::delete('/api/admin/bidders/{id}/attendance', [\App\Http\Controllers\TenantAdminController::class, 'removeDayOverride']);
         Route::post('/api/admin/impersonate/{id}', [\App\Http\Controllers\TenantAdminController::class, 'impersonate']);

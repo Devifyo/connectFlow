@@ -953,6 +953,22 @@ async function onPosDrop(e, targetPos) {
     }
 }
 
+// --- AI Background Logs ---
+const aiLogs = ref([]);
+const aiLogsLoading = ref(false);
+const showAiLogs = ref(false);
+
+async function fetchAiLogs() {
+    aiLogsLoading.value = true;
+    try {
+        const { data } = await axios.get('/api/admin/ai-background-logs');
+        aiLogs.value = data.logs;
+    } catch {} finally { aiLogsLoading.value = false; }
+}
+
+const aiLogsFailedCount = computed(() => aiLogs.value.filter(l => l.api_failed).length);
+const aiLogsBlockedCount = computed(() => aiLogs.value.filter(l => l.virtual_bg_detected && !l.api_failed).length);
+
 // --- Agency Profile ---
 const agencyProfile = ref({ skills: '', tech_stack: '', description: '', can_build: '' });
 const agencySaving = ref(false);
@@ -1243,13 +1259,15 @@ onUnmounted(() => {
                     </div>
                 </div>
                 <!-- Mobile tab bar -->
-                <div class="px-4 pb-2 flex gap-1">
-                    <button v-for="tab in ['pipeline', 'team', 'positions', 'reports', 'agency', 'announcements', 'settings']" :key="tab"
-                        @click="activeTab = tab"
-                        :class="activeTab === tab ? 'bg-surface-700 text-surface-100' : 'text-surface-400'"
-                        class="flex-1 py-1.5 rounded-md text-xs font-medium capitalize transition-colors text-center">
-                        {{ tab }}
-                    </button>
+                <div class="px-4 pb-2 overflow-x-auto scrollbar-none -mx-4 px-4">
+                    <div class="flex gap-1 min-w-max">
+                        <button v-for="tab in ['pipeline', 'team', 'positions', 'reports', 'agency', 'announcements', 'settings']" :key="tab"
+                            @click="activeTab = tab"
+                            :class="activeTab === tab ? 'bg-surface-700 text-surface-100' : 'text-surface-400'"
+                            class="px-3 py-1.5 rounded-md text-xs font-medium capitalize transition-colors whitespace-nowrap">
+                            {{ tab }}
+                        </button>
+                    </div>
                 </div>
             </header>
 
@@ -2950,6 +2968,63 @@ onUnmounted(() => {
                                     {{ passwordSaving ? 'Updating...' : 'Update Password' }}
                                 </button>
                                 <span v-if="passwordSaved" class="text-sm text-emerald-400 font-medium">Password updated!</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- AI Background Check Logs -->
+                    <div v-if="faceEnabled" class="card p-6">
+                        <div class="flex items-center justify-between mb-4">
+                            <div>
+                                <h2 class="text-base font-semibold text-surface-100 mb-1">AI Background Check Logs</h2>
+                                <p class="text-sm text-surface-400">Monitor AI-powered virtual background detection during face verification.</p>
+                            </div>
+                            <button @click="showAiLogs = !showAiLogs; if (showAiLogs && !aiLogs.length) fetchAiLogs()"
+                                class="btn-secondary text-xs px-4 py-2">
+                                {{ showAiLogs ? 'Hide' : 'View Logs' }}
+                            </button>
+                        </div>
+
+                        <div v-if="showAiLogs">
+                            <div v-if="aiLogsLoading" class="flex items-center justify-center py-8">
+                                <div class="w-6 h-6 border-2 border-brand/30 border-t-brand rounded-full animate-spin"></div>
+                            </div>
+
+                            <div v-else-if="aiLogs.length === 0" class="text-center py-6">
+                                <p class="text-sm text-surface-500">No AI background checks recorded yet.</p>
+                            </div>
+
+                            <div v-else>
+                                <div class="flex items-center gap-4 mb-4">
+                                    <div class="flex items-center gap-1.5 text-xs">
+                                        <div class="w-2 h-2 rounded-full bg-red-500"></div>
+                                        <span class="text-surface-400">API Failures: <span class="text-red-400 font-semibold">{{ aiLogsFailedCount }}</span></span>
+                                    </div>
+                                    <div class="flex items-center gap-1.5 text-xs">
+                                        <div class="w-2 h-2 rounded-full bg-amber-500"></div>
+                                        <span class="text-surface-400">Virtual BG Blocked: <span class="text-amber-400 font-semibold">{{ aiLogsBlockedCount }}</span></span>
+                                    </div>
+                                    <button @click="fetchAiLogs" class="ml-auto text-[10px] text-surface-500 hover:text-surface-300 transition-colors">Refresh</button>
+                                </div>
+
+                                <div class="max-h-80 overflow-y-auto scrollbar-thin space-y-1.5">
+                                    <div v-for="log in aiLogs" :key="log.id"
+                                        class="px-3 py-2 rounded-lg border text-xs"
+                                        :class="log.api_failed ? 'bg-red-500/5 border-red-500/20' : log.virtual_bg_detected ? 'bg-amber-500/5 border-amber-500/20' : 'bg-surface-800/30 border-surface-700/20'">
+                                        <div class="flex items-center gap-2 flex-wrap">
+                                            <span v-if="log.api_failed" class="px-1.5 py-0.5 rounded font-medium bg-red-500/15 text-red-400">API Failed</span>
+                                            <span v-else-if="log.virtual_bg_detected" class="px-1.5 py-0.5 rounded font-medium bg-amber-500/15 text-amber-400">Blocked</span>
+                                            <span v-else class="px-1.5 py-0.5 rounded font-medium bg-emerald-500/10 text-emerald-400">Passed</span>
+                                            <span class="text-surface-500">{{ log.provider }}</span>
+                                            <span class="text-surface-600">{{ log.action }}</span>
+                                            <span v-if="log.user_name" class="text-surface-400">{{ log.user_name }}</span>
+                                            <span v-if="log.confidence" class="text-surface-500">{{ Math.round(log.confidence * 100) }}%</span>
+                                            <span class="text-surface-600 ml-auto">{{ new Date(log.created_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) }}</span>
+                                        </div>
+                                        <p v-if="log.api_failed && log.error_message" class="mt-1 text-red-400/80 text-[10px] truncate" :title="log.error_message">{{ log.error_message }}</p>
+                                        <p v-else-if="log.reason" class="mt-1 text-surface-500 text-[10px] truncate" :title="log.reason">{{ log.reason }}</p>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
