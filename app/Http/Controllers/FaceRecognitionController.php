@@ -9,6 +9,8 @@ use App\Models\User;
 use App\Services\DeepStackService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 
 class FaceRecognitionController extends Controller
@@ -79,6 +81,15 @@ class FaceRecognitionController extends Controller
             }
         }
 
+        $aiResult = $this->analyzeBackgroundWithAI($request->images[0]);
+        if ($aiResult && $aiResult['virtual_bg'] === true && ($aiResult['confidence'] ?? 0) >= 0.75) {
+            Log::info("AI background detection blocked verify for user {$user->id}: " . ($aiResult['reason'] ?? 'virtual bg'));
+            return response()->json([
+                'verified' => false,
+                'error' => 'Virtual or filtered background detected. Please use a real physical background and try again.',
+            ]);
+        }
+
         $bestConfidence = 0;
         $bestMatchUserId = null;
         $faceDetected = false;
@@ -117,7 +128,7 @@ class FaceRecognitionController extends Controller
         // Accept same-tenant match with high confidence for punch verification
         // (user is already authenticated — this confirms a real person is present)
         if ($bestMatchUserId && $bestConfidence >= 0.60) {
-            \Log::info("Face verify: user {$user->id} matched as {$bestMatchUserId} (conf: {$bestConfidence})");
+            Log::info("Face verify: user {$user->id} matched as {$bestMatchUserId} (conf: {$bestConfidence})");
             return response()->json([
                 'verified' => true,
                 'confidence' => round($bestConfidence, 4),
@@ -203,6 +214,79 @@ class FaceRecognitionController extends Controller
         if ($blendRatio2 > 0.55) $flags++;
 
         return $flags >= 2;
+    }
+
+    private function analyzeBackgroundWithAI(string $base64Image): ?array
+    {
+        $apiKey = config('services.anthropic.api_key');
+        if (!$apiKey) return null;
+
+        $imageData = preg_replace('/^data:image\/\w+;base64,/', '', $base64Image);
+
+        $prompt = 'You are a security system analyzing webcam frames for face verification during employee clock-in. '
+            . 'Your job is to detect if the background is REAL and UNMODIFIED or if ANY digital manipulation has been applied. '
+            . 'This is captured from a laptop/phone webcam for a workplace punch-in system. '
+            . "\n\nFLAG AS VIRTUAL (virtual_bg: true) if ANY of these are detected:\n"
+            . '1) Virtual/replaced background: outdoor scenes, stock photos, custom images behind the person. '
+            . '2) Background blur of ANY kind: iPhone/Android portrait mode, Zoom/Teams/Meet blur, any app-based blur. '
+            . 'IMPORTANT: Webcams and front-facing phone cameras have small sensors with wide depth of field — they do NOT produce natural background blur/bokeh. '
+            . 'If the person is sharp but the background is blurry, it is ALWAYS artificial (computational blur from portrait mode, video call apps, or camera settings). Flag it. '
+            . '3) Green screen or chroma key replacement. '
+            . '4) Segmentation artifacts: soft/feathered edges around hair, shoulders, or body outline. '
+            . '5) Lighting mismatch between person and background. '
+            . '6) Video call UI overlays, watermarks, or app interface elements visible. '
+            . '7) Person indoors but background shows outdoors. '
+            . '8) Background is unnaturally uniform, smooth, or has suspiciously low texture/detail. '
+            . "\n\nFLAG AS REAL (virtual_bg: false) ONLY if the background is clearly a real, unmodified physical environment with natural detail, texture, and consistent lighting throughout the entire image.\n"
+            . 'Be STRICT. When uncertain, lean toward flagging. '
+            . 'Reply with ONLY a JSON object: {"virtual_bg": true/false, "confidence": 0.0-1.0, "reason": "brief reason"}';
+
+        try {
+            $response = Http::timeout(10)->withHeaders([
+                'x-api-key' => $apiKey,
+                'anthropic-version' => '2023-06-01',
+                'content-type' => 'application/json',
+            ])->post('https://api.anthropic.com/v1/messages', [
+                'model' => 'claude-haiku-4-5-20251001',
+                'max_tokens' => 200,
+                'messages' => [[
+                    'role' => 'user',
+                    'content' => [
+                        [
+                            'type' => 'image',
+                            'source' => [
+                                'type' => 'base64',
+                                'media_type' => 'image/jpeg',
+                                'data' => $imageData,
+                            ],
+                        ],
+                        [
+                            'type' => 'text',
+                            'text' => $prompt,
+                        ],
+                    ],
+                ]],
+            ]);
+
+            if ($response->successful()) {
+                $text = $response->json('content.0.text', '');
+                $text = preg_replace('/^```(?:json)?\s*|\s*```$/m', '', trim($text));
+                $json = json_decode($text, true);
+                if ($json && isset($json['virtual_bg'])) {
+                    return $json;
+                }
+                if (preg_match('/\{[^}]+\}/', $text, $m)) {
+                    $json = json_decode($m[0], true);
+                    if ($json && isset($json['virtual_bg'])) {
+                        return $json;
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            Log::warning('AI background analysis failed: ' . $e->getMessage());
+        }
+
+        return null;
     }
 
     private function base64ToGdImage(string $base64): ?\GdImage
@@ -515,6 +599,18 @@ class FaceRecognitionController extends Controller
         $centerFrame = collect($request->frames)->firstWhere('key', 'center');
         if (!$centerFrame) {
             return response()->json(['error' => 'Center frame is required.'], 422);
+        }
+
+        $aiResult = $this->analyzeBackgroundWithAI($centerFrame['image']);
+        if ($aiResult && $aiResult['virtual_bg'] === true && ($aiResult['confidence'] ?? 0) >= 0.75) {
+            Log::info("AI background detection blocked face login from IP {$ip}: " . ($aiResult['reason'] ?? 'virtual bg'));
+            FaceLoginAttempt::create([
+                'ip_address' => $ip,
+                'user_agent' => $ua,
+                'success' => false,
+                'failure_reason' => 'virtual_background_detected',
+            ]);
+            return response()->json(['error' => 'Virtual or filtered background detected. Please use a real physical background and try again.'], 403);
         }
 
         $result = $deepstack->recognizeFace($centerFrame['image']);
