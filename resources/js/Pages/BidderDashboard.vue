@@ -17,6 +17,7 @@ import GlobalMessagePopup from '@/Components/GlobalMessagePopup.vue';
 import { useGlobalMessages } from '@/composables/useGlobalMessages';
 import { useWebcam } from '@/composables/useWebcam';
 import { useVideoUploader } from '@/composables/useVideoUploader';
+import { useStreamingRecorder, resumeStreamQueue } from '@/composables/useStreamingRecorder';
 
 const props = defineProps(['auth', 'impersonating', 'face_recognition']);
 
@@ -151,8 +152,9 @@ let analyzeInterval = null;
 let metricsInterval = null;
 let continuousUploadInterval = null;
 let delayPunchSuccess = false;
-const { videoRef: punchVideoRef, isStreaming: punchCamStreaming, error: punchCamError, startCamera: startPunchCam, stopCamera: stopPunchCam, captureFrame: capturePunchFrame, startRecording: startPunchRecording, stopRecording: stopPunchRecording } = useWebcam();
+const { videoRef: punchVideoRef, isStreaming: punchCamStreaming, error: punchCamError, startCamera: startPunchCam, stopCamera: stopPunchCam, captureFrame: capturePunchFrame, startRecording: startPunchRecording, stopRecording: stopPunchRecording, getStream: getPunchStream } = useWebcam();
 const { queueUpload: queueVideoUpload } = useVideoUploader();
+const { start: startPunchStream, stop: stopPunchStream, isActive: isPunchStreaming } = useStreamingRecorder();
 
 function onFaceEnrolled() {
     faceEnrolled.value = true;
@@ -588,7 +590,9 @@ async function closeSuccessModal() {
 
 function stopBackgroundRecording() {
     stopContinuousUpload();
-    if (punchRecordingActive) {
+    if (isPunchStreaming()) {
+        stopPunchStream().then(() => stopPunchCam());
+    } else if (punchRecordingActive) {
         stopPunchRecording().then(clip => {
             punchRecordingActive = false;
             if (clip) queueVideoUpload(clip, punchSuccessType.value, punchSuccessLogId, true, punchLocation.value);
@@ -610,17 +614,31 @@ function stopFaceMetrics() {
     if (metricsInterval) { clearInterval(metricsInterval); metricsInterval = null; }
 }
 
-function startContinuousUpload(type, logId) {
-    continuousUploadInterval = setInterval(async () => {
-        if (!punchRecordingActive) return;
+async function startContinuousUpload(type, logId) {
+    // Stop the pre-success attempt recorder and hand its clip off to the uploader...
+    if (punchRecordingActive) {
         const clip = await stopPunchRecording();
         punchRecordingActive = false;
-        if (clip) {
-            queueVideoUpload(clip, type, logId, true, punchLocation.value);
-        }
-        startPunchRecording();
-        punchRecordingActive = true;
-    }, 10000);
+        if (clip) queueVideoUpload(clip, type, logId, true, punchLocation.value);
+    }
+    // ...then stream the rest live (webm browsers). Chunks land on the server as they're
+    // recorded, so a fast close still leaves a valid video and the admin sees no stuck loader.
+    const streamId = startPunchStream(getPunchStream(), { type, timeLogId: logId, verified: true, location: punchLocation.value });
+    if (streamId) return;
+
+    // iOS Safari records mp4 (can't be streamed) — fall back to periodic whole-clip uploads.
+    startPunchRecording();
+    punchRecordingActive = true;
+    continuousUploadInterval = setInterval(() => flushPunchClip(type, logId), 8000);
+}
+
+async function flushPunchClip(type, logId) {
+    if (!punchRecordingActive) return;
+    const clip = await stopPunchRecording();
+    punchRecordingActive = false;
+    if (clip) queueVideoUpload(clip, type, logId, true, punchLocation.value);
+    startPunchRecording();
+    punchRecordingActive = true;
 }
 
 function stopContinuousUpload() {
@@ -1164,6 +1182,8 @@ onMounted(() => {
     fetchUnreadCount();
     startHeartbeat();
     initGlobalMessages();
+    // Re-send any streamed punch chunks that didn't finish uploading before a previous close.
+    resumeStreamQueue();
     if (props.auth.user?.id && window.Echo) {
         window.Echo.private(`messages.${props.auth.user.id}`)
             .listen('.message.sent', handleIncomingMessage)
@@ -1186,7 +1206,7 @@ function handleBeforeUnload() {
 }
 
 function handleVisibilityChange() {
-    if (document.hidden && punchRecordingActive && !showPunchModal.value) {
+    if (document.hidden && (punchRecordingActive || isPunchStreaming()) && !showPunchModal.value) {
         stopBackgroundRecording();
         stopFaceMetrics();
     }

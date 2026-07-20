@@ -15,6 +15,7 @@ RUN apk add --no-cache \
     shadow \
     nodejs \
     npm \
+    ffmpeg \
     supervisor
 
 # 2. PHP Extensions

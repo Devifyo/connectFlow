@@ -4,6 +4,7 @@ import { onMounted, onUnmounted, ref, computed, watch, nextTick } from 'vue';
 import PitchFlowLogo from '@/Components/PitchFlowLogo.vue';
 import MessagingPanel from '@/Components/Messaging/MessagingPanel.vue';
 import GlobalMessagePopup from '@/Components/GlobalMessagePopup.vue';
+import FaceVideoPlayer from '@/Components/FaceVideoPlayer.vue';
 import AnnouncementEditor from '@/Components/AnnouncementEditor.vue';
 import { useMessaging } from '@/composables/useMessaging';
 import { useGlobalMessages } from '@/composables/useGlobalMessages';
@@ -424,19 +425,31 @@ async function fetchMemberFaceVideos() {
 
 const sessionVideoPopup = ref(null);
 
+// A punch whose video hasn't arrived within this window is treated as "never uploaded"
+// (employee closed the app before the upload finished) rather than "still uploading".
+const VIDEO_PENDING_WINDOW_MS = 5 * 60 * 1000;
+
 function getSessionVideos(session) {
-    const empty = { punch_in: [], punch_out: [], punch_in_pending: false, punch_out_pending: false };
+    const empty = { punch_in: [], punch_out: [], punch_in_pending: false, punch_out_pending: false, punch_in_missing: false, punch_out_missing: false };
     if (!session.log_id) return empty;
     if (!faceEnabled.value) return empty;
 
     const pinAll = memberFaceVideos.value.filter(v => v.type === 'punch_in' && v.time_log_id === session.log_id);
     const poutAll = memberFaceVideos.value.filter(v => v.type === 'punch_out' && v.time_log_id === session.log_id);
 
+    const now = Date.now();
+    const recent = (ts) => ts && (now - new Date(ts).getTime()) < VIDEO_PENDING_WINDOW_MS;
+
+    const inNoVideo = pinAll.length === 0 && !!session.in;
+    const outNoVideo = poutAll.length === 0 && !!session.out;
+
     return {
         punch_in: pinAll,
         punch_out: poutAll,
-        punch_in_pending: pinAll.length === 0 && !!session.in,
-        punch_out_pending: poutAll.length === 0 && !!session.out,
+        punch_in_pending: inNoVideo && recent(session.in),
+        punch_out_pending: outNoVideo && recent(session.out),
+        punch_in_missing: inNoVideo && !recent(session.in),
+        punch_out_missing: outNoVideo && !recent(session.out),
     };
 }
 
@@ -2040,6 +2053,9 @@ onUnmounted(() => {
                                                             <span v-else-if="getSessionVideos(s).punch_in_pending" class="p-0.5" title="Video uploading...">
                                                                 <div class="w-3.5 h-3.5 border-[1.5px] border-emerald-400/20 border-t-emerald-400/60 rounded-full animate-spin"></div>
                                                             </span>
+                                                            <span v-else-if="getSessionVideos(s).punch_in_missing" class="p-0.5 text-surface-600" title="No video — employee closed the app before it finished uploading">
+                                                                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 10.5l4.72-4.72a.75.75 0 011.28.53v11.38a.75.75 0 01-1.28.53l-4.72-4.72M12 18.75H4.5a2.25 2.25 0 01-2.25-2.25V7.5m1.5-3l16.5 16.5"/></svg>
+                                                            </span>
                                                             <svg class="w-3 h-3 text-surface-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>
                                                             <span class="font-mono" :class="s.out ? 'text-red-400' : 'text-emerald-400'">{{ s.out ? new Date(s.out).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Active' }}</span>
                                                             <button v-if="getSessionVideos(s).punch_out.length" @click="openSessionVideoPopup(s, 'out')" class="p-0.5 rounded transition-colors" :class="getSessionVideos(s).punch_out.some(v => !v.verified) ? 'text-amber-400/70 hover:text-amber-400' : 'text-red-400/60 hover:text-red-400'" :title="`${getSessionVideos(s).punch_out.length} video(s)`">
@@ -2047,6 +2063,9 @@ onUnmounted(() => {
                                                             </button>
                                                             <span v-else-if="getSessionVideos(s).punch_out_pending" class="p-0.5" title="Video uploading...">
                                                                 <div class="w-3.5 h-3.5 border-[1.5px] border-red-400/20 border-t-red-400/60 rounded-full animate-spin"></div>
+                                                            </span>
+                                                            <span v-else-if="getSessionVideos(s).punch_out_missing" class="p-0.5 text-surface-600" title="No video — employee closed the app before it finished uploading">
+                                                                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 10.5l4.72-4.72a.75.75 0 011.28.53v11.38a.75.75 0 01-1.28.53l-4.72-4.72M12 18.75H4.5a2.25 2.25 0 01-2.25-2.25V7.5m1.5-3l16.5 16.5"/></svg>
                                                             </span>
                                                             <span class="text-surface-500 ml-auto">{{ formatHours(s.hours) }}</span>
                                                         </div>
@@ -2165,7 +2184,7 @@ onUnmounted(() => {
                                 </button>
                             </div>
                             <div class="p-4">
-                                <video :src="faceVideoModalUrl" controls autoplay class="w-full rounded-xl bg-black"></video>
+                                <FaceVideoPlayer :src="faceVideoModalUrl" :autoplay="true" />
                             </div>
                         </div>
                     </div>
@@ -2211,7 +2230,7 @@ onUnmounted(() => {
                                         </div>
                                     </div>
                                     <div class="px-5 pb-3">
-                                        <video :src="`/api/face/video/${vid.id}`" controls preload="metadata" class="w-full rounded-lg bg-black mt-1"></video>
+                                        <FaceVideoPlayer :src="`/api/face/video/${vid.id}`" />
                                     </div>
                                 </div>
                             </div>
@@ -2248,7 +2267,7 @@ onUnmounted(() => {
                                         <svg class="w-4 h-4" :fill="failedAttemptPopup.starred ? 'currentColor' : 'none'" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M11.48 3.499a.562.562 0 011.04 0l2.125 5.111a.563.563 0 00.475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 00-.182.557l1.285 5.385a.562.562 0 01-.84.61l-4.725-2.885a.562.562 0 00-.586 0L6.982 20.54a.562.562 0 01-.84-.61l1.285-5.386a.562.562 0 00-.182-.557l-4.204-3.602a.562.562 0 01.321-.988l5.518-.442a.563.563 0 00.475-.345L11.48 3.5z"/></svg>
                                     </button>
                                 </div>
-                                <video :src="`/api/face/video/${failedAttemptPopup.id}`" controls autoplay class="w-full rounded-lg bg-black"></video>
+                                <FaceVideoPlayer :src="`/api/face/video/${failedAttemptPopup.id}`" :autoplay="true" />
                             </div>
                         </div>
                     </div>

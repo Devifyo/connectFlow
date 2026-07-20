@@ -544,6 +544,8 @@ class FaceRecognitionController extends Controller
         $dir = "face-videos/{$user->tenant_id}/{$user->id}";
         $path = $request->file('video')->store($dir, 'local');
 
+        $path = $this->finalizeVideoFile($path);
+
         FaceVideo::create([
             'tenant_id' => $user->tenant_id,
             'user_id' => $user->id,
@@ -561,6 +563,58 @@ class FaceRecognitionController extends Controller
         return response()->json(['status' => 'success']);
     }
 
+    // Recordings from MediaRecorder often have no duration marker and non-monotonic
+    // timestamps, so browsers show duration=Infinity or play only the first frame and stall.
+    // A plain remux (`-c copy`) can't fix the baked-in timestamps, so we RE-ENCODE to a clean,
+    // faststart H.264/AAC mp4 that plays and seeks everywhere. Returns the (possibly new .mp4)
+    // relative path; on any failure the original path is returned unchanged.
+    private function finalizeVideoFile(string $relativePath): string
+    {
+        try {
+            $full = Storage::disk('local')->path($relativePath);
+            if (!is_file($full) || filesize($full) < 1024) {
+                return $relativePath;
+            }
+
+            $dir = trim(dirname($relativePath), '.');
+            $name = pathinfo($relativePath, PATHINFO_FILENAME);
+            $newRel = ($dir !== '' ? $dir . '/' : '') . $name . '.mp4';
+            $newFull = Storage::disk('local')->path($newRel);
+            $tmp = $newFull . '.tmp.mp4';
+
+            $cmd = sprintf(
+                'ffmpeg -y -loglevel error -fflags +genpts -i %s -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -movflags +faststart %s',
+                escapeshellarg($full), escapeshellarg($tmp)
+            );
+            exec($cmd . ' 2>/dev/null', $out, $code);
+
+            if ($code === 0 && is_file($tmp) && filesize($tmp) > 1024) {
+                @rename($tmp, $newFull);
+                if ($newFull !== $full) {
+                    @unlink($full);
+                }
+                return $newRel;
+            }
+
+            // Re-encode failed (e.g. audio-only clip). Drop the temp and at least remux for duration.
+            if (is_file($tmp)) {
+                @unlink($tmp);
+            }
+            $ext = strtolower(pathinfo($relativePath, PATHINFO_EXTENSION)) === 'mp4' ? 'mp4' : 'webm';
+            $remux = $full . '.fix.' . $ext;
+            exec(sprintf('ffmpeg -y -loglevel error -i %s -c copy -f %s %s 2>/dev/null',
+                escapeshellarg($full), $ext, escapeshellarg($remux)), $o2, $c2);
+            if ($c2 === 0 && is_file($remux) && filesize($remux) > 1024) {
+                @rename($remux, $full);
+            } elseif (is_file($remux)) {
+                @unlink($remux);
+            }
+            return $relativePath;
+        } catch (\Throwable $e) {
+            return $relativePath;
+        }
+    }
+
     public function uploadVideoChunk(Request $request)
     {
         $request->validate([
@@ -574,41 +628,41 @@ class FaceRecognitionController extends Controller
             'latitude' => 'nullable|numeric|between:-90,90',
             'longitude' => 'nullable|numeric|between:-180,180',
             'address' => 'nullable|string|max:500',
+            'ext' => 'nullable|in:webm,mp4',
         ]);
 
         $user = auth()->user();
         $uploadId = preg_replace('/[^a-zA-Z0-9_\-]/', '', $request->upload_id);
-        $chunkDir = "face-video-chunks/{$user->id}/{$uploadId}";
-
-        $request->file('chunk')->storeAs($chunkDir, "chunk_{$request->chunk_index}", 'local');
+        $ext = $request->input('ext') === 'mp4' ? 'mp4' : 'webm';
 
         $totalChunks = (int) $request->total_chunks;
         $chunkIndex = (int) $request->chunk_index;
 
-        if ($chunkIndex === $totalChunks - 1) {
-            $dir = "face-videos/{$user->tenant_id}/{$user->id}";
-            $filename = "{$uploadId}.webm";
-            $finalPath = "{$dir}/{$filename}";
+        // Append each chunk to the final file as it arrives (chunk 0 carries the header),
+        // and create the DB row on chunk 0. This way a punch upload that is interrupted
+        // — e.g. the employee locks the phone right after clocking in — still leaves a
+        // playable video and a visible record instead of an orphaned pile of chunks.
+        $dir = "face-videos/{$user->tenant_id}/{$user->id}";
+        $finalPath = "{$dir}/{$uploadId}.{$ext}";
+        Storage::disk('local')->makeDirectory($dir);
+        Storage::disk('local')->makeDirectory("face-video-chunks/{$user->id}");
+        $fullPath = Storage::disk('local')->path($finalPath);
+        $seqPath = Storage::disk('local')->path("face-video-chunks/{$user->id}/.{$uploadId}.seq");
 
-            Storage::disk('local')->makeDirectory($dir);
-            $fullPath = Storage::disk('local')->path($finalPath);
-            $out = fopen($fullPath, 'wb');
+        $lastSeq = is_file($seqPath) ? (int) file_get_contents($seqPath) : -1;
 
-            for ($i = 0; $i < $totalChunks; $i++) {
-                $chunkPath = Storage::disk('local')->path("{$chunkDir}/chunk_{$i}");
-                if (!file_exists($chunkPath)) {
-                    fclose($out);
-                    @unlink($fullPath);
-                    return response()->json(['error' => "Missing chunk {$i}"], 422);
-                }
-                $in = fopen($chunkPath, 'rb');
-                stream_copy_to_stream($in, $out);
-                fclose($in);
-            }
-            fclose($out);
+        // Idempotent, strictly ordered append (tolerates client retries / re-sends).
+        if ($chunkIndex <= $lastSeq) {
+            return response()->json(['status' => 'duplicate', 'last_seq' => $lastSeq]);
+        }
+        if ($chunkIndex !== $lastSeq + 1) {
+            return response()->json(['error' => 'out_of_order', 'last_seq' => $lastSeq], 409);
+        }
 
-            Storage::disk('local')->deleteDirectory($chunkDir);
+        $bytes = file_get_contents($request->file('chunk')->getRealPath());
 
+        if ($chunkIndex === 0) {
+            file_put_contents($fullPath, $bytes);
             FaceVideo::create([
                 'tenant_id' => $user->tenant_id,
                 'user_id' => $user->id,
@@ -622,11 +676,117 @@ class FaceRecognitionController extends Controller
                 'ip_address' => $request->ip(),
                 'device' => $request->userAgent(),
             ]);
+        } else {
+            file_put_contents($fullPath, $bytes, FILE_APPEND);
+        }
 
+        file_put_contents($seqPath, (string) $chunkIndex);
+
+        if ($chunkIndex === $totalChunks - 1) {
+            @unlink($seqPath);
+            $newPath = $this->finalizeVideoFile($finalPath);
+            if ($newPath !== $finalPath) {
+                FaceVideo::where('file_path', $finalPath)->where('user_id', $user->id)
+                    ->update(['file_path' => $newPath]);
+            }
             return response()->json(['status' => 'complete']);
         }
 
         return response()->json(['status' => 'chunk_received', 'chunk_index' => $chunkIndex]);
+    }
+
+    // Live streaming upload: the recorder pushes each ~2s webm chunk as it is produced and
+    // we append it to the final file in order. Because chunk 0 carries the webm header, the
+    // file stays playable at every point — so if the employee closes the browser mid-punch,
+    // whatever reached the server is already a valid (if short) video instead of a broken one.
+    public function streamVideoChunk(Request $request)
+    {
+        $request->validate([
+            'chunk' => 'required|file|max:4096',
+            'upload_id' => 'required|string|max:100',
+            'seq' => 'required|integer|min:0',
+            'type' => 'required|in:enrollment,punch_in,punch_out',
+            'time_log_id' => 'nullable|integer',
+            'verified' => 'nullable|boolean',
+            'latitude' => 'nullable|numeric|between:-90,90',
+            'longitude' => 'nullable|numeric|between:-180,180',
+            'address' => 'nullable|string|max:500',
+        ]);
+
+        $user = auth()->user();
+        $uploadId = preg_replace('/[^a-zA-Z0-9_\-]/', '', $request->upload_id);
+        $seq = (int) $request->seq;
+
+        $dir = "face-videos/{$user->tenant_id}/{$user->id}";
+        $file = "{$dir}/{$uploadId}.webm";
+        Storage::disk('local')->makeDirectory($dir);
+        Storage::disk('local')->makeDirectory("face-video-chunks/{$user->id}");
+        $fullFile = Storage::disk('local')->path($file);
+        $seqPath = Storage::disk('local')->path("face-video-chunks/{$user->id}/{$uploadId}.seq");
+
+        $lastSeq = is_file($seqPath) ? (int) file_get_contents($seqPath) : -1;
+
+        // Idempotent, strictly ordered append (handles retries and re-sends on reopen).
+        if ($seq <= $lastSeq) {
+            return response()->json(['status' => 'duplicate', 'last_seq' => $lastSeq]);
+        }
+        if ($seq !== $lastSeq + 1) {
+            return response()->json(['error' => 'out_of_order', 'last_seq' => $lastSeq], 409);
+        }
+
+        $bytes = file_get_contents($request->file('chunk')->getRealPath());
+
+        if ($seq === 0) {
+            file_put_contents($fullFile, $bytes);
+            FaceVideo::create([
+                'tenant_id' => $user->tenant_id,
+                'user_id' => $user->id,
+                'type' => $request->type,
+                'file_path' => $file,
+                'time_log_id' => $request->time_log_id,
+                'verified' => $request->has('verified') ? $request->boolean('verified') : true,
+                'latitude' => $request->latitude,
+                'longitude' => $request->longitude,
+                'address' => $request->address,
+                'ip_address' => $request->ip(),
+                'device' => $request->userAgent(),
+            ]);
+        } else {
+            file_put_contents($fullFile, $bytes, FILE_APPEND);
+        }
+
+        file_put_contents($seqPath, (string) $seq);
+
+        return response()->json(['status' => 'ok', 'last_seq' => $seq]);
+    }
+
+    public function streamVideoFinalize(Request $request)
+    {
+        $request->validate([
+            'upload_id' => 'required|string|max:100',
+            'time_log_id' => 'nullable|integer',
+        ]);
+
+        $user = auth()->user();
+        $uploadId = preg_replace('/[^a-zA-Z0-9_\-]/', '', $request->upload_id);
+        $file = "face-videos/{$user->tenant_id}/{$user->id}/{$uploadId}.webm";
+
+        if ($request->filled('time_log_id')) {
+            FaceVideo::where('file_path', $file)
+                ->where('user_id', $user->id)
+                ->update(['time_log_id' => (int) $request->time_log_id]);
+        }
+
+        @unlink(Storage::disk('local')->path("face-video-chunks/{$user->id}/{$uploadId}.seq"));
+
+        // Live-streamed file needs re-encoding to be natively playable/seekable.
+        $newFile = $this->finalizeVideoFile($file);
+        if ($newFile !== $file) {
+            FaceVideo::where('file_path', $file)->where('user_id', $user->id)
+                ->update(['file_path' => $newFile]);
+        }
+
+        return response()->json(['status' => 'finalized']);
     }
 
     public function memberVideos(Request $request, $userId)
@@ -675,8 +835,11 @@ class FaceRecognitionController extends Controller
             abort(404);
         }
 
+        $ext = strtolower(pathinfo($video->file_path, PATHINFO_EXTENSION));
+        $mime = $ext === 'mp4' ? 'video/mp4' : 'video/webm';
+
         return response()->file($path, [
-            'Content-Type' => 'video/webm',
+            'Content-Type' => $mime,
         ]);
     }
 

@@ -1,12 +1,16 @@
 import { ref, onUnmounted } from 'vue';
+import { pickRecorderMimeType } from '@/composables/recorderMime';
 
 export function useWebcam() {
     const videoRef = ref(null);
     const isStreaming = ref(false);
     const error = ref('');
     let stream = null;
-    let mediaRecorder = null;
-    let recordedChunks = [];
+    // Each recording is a self-contained { recorder, chunks } session. Keeping the
+    // chunks per-session (not in shared state) prevents a stop/restart race — e.g. the
+    // 10s continuous-upload timer firing while a browser-close handler also stops the
+    // recorder — from mixing two recordings into a headerless, unplayable blob.
+    let activeSession = null;
 
     async function startCamera() {
         error.value = '';
@@ -32,6 +36,10 @@ export function useWebcam() {
     }
 
     function stopCamera() {
+        if (activeSession && activeSession.recorder.state !== 'inactive') {
+            try { activeSession.recorder.stop(); } catch {}
+        }
+        activeSession = null;
         if (stream) {
             stream.getTracks().forEach(t => t.stop());
             stream = null;
@@ -54,50 +62,47 @@ export function useWebcam() {
 
     function startRecording() {
         if (!stream) return;
-        recordedChunks = [];
-        if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-            try { mediaRecorder.stop(); } catch {}
+        // Discard any still-running session so two recorders never share the stream.
+        if (activeSession && activeSession.recorder.state !== 'inactive') {
+            try { activeSession.recorder.stop(); } catch {}
         }
-        mediaRecorder = null;
-        const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
-            ? 'video/webm;codecs=vp9'
-            : 'video/webm';
+        activeSession = null;
+        const mimeType = pickRecorderMimeType();
         try {
-            const recorder = new MediaRecorder(stream, {
-                mimeType,
-                videoBitsPerSecond: 500000,
-            });
+            const chunks = [];
+            const options = { videoBitsPerSecond: 500000 };
+            if (mimeType) options.mimeType = mimeType;
+            const recorder = new MediaRecorder(stream, options);
             recorder.ondataavailable = (e) => {
-                if (e.data && e.data.size > 0) recordedChunks.push(e.data);
+                if (e.data && e.data.size > 0) chunks.push(e.data);
             };
             recorder.start(100);
-            mediaRecorder = recorder;
+            activeSession = { recorder, chunks, type: recorder.mimeType || mimeType || 'video/webm' };
         } catch (e) {
-            mediaRecorder = null;
+            activeSession = null;
         }
     }
 
     function stopRecording() {
         return new Promise((resolve) => {
-            const recorder = mediaRecorder;
-            mediaRecorder = null;
+            const session = activeSession;
+            activeSession = null;
 
-            if (!recorder || recorder.state === 'inactive') {
-                const blob = recordedChunks.length > 0
-                    ? new Blob(recordedChunks, { type: 'video/webm' })
-                    : null;
-                recordedChunks = [];
-                resolve(blob);
+            if (!session) {
+                resolve(null);
                 return;
             }
 
-            recorder.onstop = () => {
-                const blob = recordedChunks.length > 0
-                    ? new Blob(recordedChunks, { type: 'video/webm' })
-                    : null;
-                recordedChunks = [];
-                resolve(blob);
-            };
+            const { recorder, chunks } = session;
+            const blobType = (session.type || 'video/webm').split(';')[0];
+            const buildBlob = () => (chunks.length > 0 ? new Blob(chunks, { type: blobType }) : null);
+
+            if (recorder.state === 'inactive') {
+                resolve(buildBlob());
+                return;
+            }
+
+            recorder.onstop = () => resolve(buildBlob());
 
             try {
                 recorder.requestData();
@@ -106,16 +111,12 @@ export function useWebcam() {
             try {
                 recorder.stop();
             } catch {
-                const blob = recordedChunks.length > 0
-                    ? new Blob(recordedChunks, { type: 'video/webm' })
-                    : null;
-                recordedChunks = [];
-                resolve(blob);
+                resolve(buildBlob());
             }
         });
     }
 
     onUnmounted(() => stopCamera());
 
-    return { videoRef, isStreaming, error, startCamera, stopCamera, captureFrame, startRecording, stopRecording };
+    return { videoRef, isStreaming, error, startCamera, stopCamera, captureFrame, startRecording, stopRecording, getStream: () => stream };
 }

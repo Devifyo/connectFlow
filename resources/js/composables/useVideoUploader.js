@@ -28,12 +28,38 @@ function openDB() {
     return dbPromise;
 }
 
+// Only upload recordings that actually contain a decodable video track.
+// A recording stopped too early (before the first keyframe) can end up audio-only
+// or truncated; those would spin the admin player forever, so we drop them here.
+function blobHasVideo(blob) {
+    return new Promise((resolve) => {
+        if (!blob || blob.size < 1024) { resolve(false); return; }
+        let settled = false;
+        const video = document.createElement('video');
+        const url = URL.createObjectURL(blob);
+        const finish = (result) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            try { video.removeAttribute('src'); video.load(); } catch {}
+            URL.revokeObjectURL(url);
+            resolve(result);
+        };
+        const timer = setTimeout(() => finish(false), 5000);
+        video.preload = 'metadata';
+        video.muted = true;
+        video.onloadedmetadata = () => finish(video.videoWidth > 0 && video.videoHeight > 0);
+        video.onerror = () => finish(false);
+        video.src = url;
+    });
+}
+
 async function persistToQueue(blob, type, timeLogId, verified, location) {
     try {
         const db = await openDB();
         const arrayBuffer = await blob.arrayBuffer();
         const tx = db.transaction(STORE_NAME, 'readwrite');
-        tx.objectStore(STORE_NAME).add({
+        const req = tx.objectStore(STORE_NAME).add({
             buffer: arrayBuffer,
             mimeType: blob.type,
             type,
@@ -43,10 +69,12 @@ async function persistToQueue(blob, type, timeLogId, verified, location) {
             createdAt: Date.now(),
         });
         return new Promise((resolve, reject) => {
-            tx.oncomplete = resolve;
+            tx.oncomplete = () => resolve(req.result);
             tx.onerror = () => reject(tx.error);
         });
-    } catch {}
+    } catch {
+        return null;
+    }
 }
 
 async function removeFromQueue(id) {
@@ -101,9 +129,13 @@ async function uploadWithRetry(blob, type, timeLogId, verified, onProgress, loca
     return false;
 }
 
+function extFor(blob) {
+    return blob && blob.type && blob.type.indexOf('mp4') !== -1 ? 'mp4' : 'webm';
+}
+
 async function uploadWhole(blob, type, timeLogId, verified, onProgress, location) {
     const form = new FormData();
-    form.append('video', blob, `${type}_${Date.now()}.webm`);
+    form.append('video', blob, `${type}_${Date.now()}.${extFor(blob)}`);
     form.append('type', type);
     if (timeLogId) form.append('time_log_id', String(timeLogId));
     form.append('verified', verified ? '1' : '0');
@@ -125,6 +157,7 @@ async function uploadWhole(blob, type, timeLogId, verified, onProgress, location
 
 async function uploadChunked(blob, type, timeLogId, verified, onProgress, location) {
     const totalChunks = Math.ceil(blob.size / CHUNK_SIZE);
+    const ext = extFor(blob);
     const uploadId = `${type}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
     for (let i = 0; i < totalChunks; i++) {
@@ -133,10 +166,11 @@ async function uploadChunked(blob, type, timeLogId, verified, onProgress, locati
         const chunk = blob.slice(start, end);
 
         const form = new FormData();
-        form.append('chunk', chunk, `${uploadId}_part${i}.webm`);
+        form.append('chunk', chunk, `${uploadId}_part${i}.${ext}`);
         form.append('upload_id', uploadId);
         form.append('chunk_index', String(i));
         form.append('total_chunks', String(totalChunks));
+        form.append('ext', ext);
         form.append('type', type);
         if (timeLogId) form.append('time_log_id', String(timeLogId));
         form.append('verified', verified ? '1' : '0');
@@ -175,6 +209,11 @@ async function processQueue(onProgress) {
         const items = await getAllQueued();
         for (const item of items) {
             const blob = new Blob([item.buffer], { type: item.mimeType || 'video/webm' });
+            if (!(await blobHasVideo(blob))) {
+                // Corrupt/audio-only leftover — drop it so it doesn't retry forever.
+                await removeFromQueue(item.id);
+                continue;
+            }
             const verified = item.verified !== false;
             const ok = await uploadWithRetry(blob, item.type, item.timeLogId, verified, onProgress, item.location);
             if (ok) {
@@ -204,12 +243,19 @@ export function useVideoUploader() {
     async function queueUpload(blob, type, timeLogId, verified = true, location = null) {
         if (!blob) return;
 
-        await persistToQueue(blob, type, timeLogId, verified, location);
+        // Persist FIRST so a fast browser-close (right after punch) can't lose the clip —
+        // it stays queued and re-uploads next time the app opens. Validation drops
+        // unplayable recordings both here and in processQueue.
+        const queueId = await persistToQueue(blob, type, timeLogId, verified, location);
+
+        if (!(await blobHasVideo(blob))) {
+            if (queueId != null) await removeFromQueue(queueId);
+            return;
+        }
+
         uploadWithRetry(blob, type, timeLogId, verified, handleProgress, location).then(async (ok) => {
-            if (ok) {
-                const items = await getAllQueued();
-                const match = items.find(i => i.type === type && i.timeLogId === (timeLogId || null) && i.verified === verified);
-                if (match) await removeFromQueue(match.id);
+            if (ok && queueId != null) {
+                await removeFromQueue(queueId);
             }
         });
     }
