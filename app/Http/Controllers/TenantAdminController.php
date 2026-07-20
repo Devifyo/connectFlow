@@ -516,6 +516,81 @@ class TenantAdminController extends Controller
         return response()->json(['status' => 'success']);
     }
 
+    public function adminPunchIn(Request $request, $userId)
+    {
+        $request->validate([
+            'date' => 'required|date',
+            'time' => 'required|date_format:H:i',
+            'note' => 'nullable|string|max:255',
+        ]);
+
+        $user = User::findOrFail($userId);
+        $activeShift = TimeLog::where('user_id', $user->id)
+            ->whereNull('logout_time')
+            ->where('date', $request->date)
+            ->first();
+
+        if ($activeShift) {
+            return response()->json(['error' => 'User already has an active shift on this date.'], 400);
+        }
+
+        $loginTime = Carbon::parse($request->date . ' ' . $request->time, 'UTC');
+
+        $log = TimeLog::create([
+            'tenant_id' => auth()->user()->tenant_id,
+            'user_id' => $user->id,
+            'login_time' => $loginTime,
+            'date' => $request->date,
+            'punch_in_address' => 'Manual punch by admin' . ($request->note ? ': ' . $request->note : ''),
+        ]);
+
+        return response()->json(['status' => 'success', 'log_id' => $log->log_id]);
+    }
+
+    public function adminPunchOut(Request $request, $userId)
+    {
+        $request->validate([
+            'date' => 'required|date',
+            'time' => 'required|date_format:H:i',
+            'log_id' => 'nullable|integer',
+            'note' => 'nullable|string|max:255',
+        ]);
+
+        $user = User::findOrFail($userId);
+
+        if ($request->log_id) {
+            $log = TimeLog::where('log_id', $request->log_id)
+                ->where('user_id', $user->id)
+                ->whereNull('logout_time')
+                ->first();
+        } else {
+            $log = TimeLog::where('user_id', $user->id)
+                ->where('date', $request->date)
+                ->whereNull('logout_time')
+                ->latest('login_time')
+                ->first();
+        }
+
+        if (!$log) {
+            return response()->json(['error' => 'No active shift found for this user on this date.'], 400);
+        }
+
+        $logoutTime = Carbon::parse($request->date . ' ' . $request->time, 'UTC');
+        if ($logoutTime->lte($log->login_time)) {
+            $logoutTime = $logoutTime->addDay();
+        }
+
+        $totalHours = abs($logoutTime->floatDiffInHours($log->login_time));
+
+        $log->update([
+            'logout_time' => $logoutTime,
+            'total_hours' => round($totalHours, 4),
+            'punch_out_address' => 'Manual punch by admin' . ($request->note ? ': ' . $request->note : ''),
+        ]);
+
+        return response()->json(['status' => 'success', 'total_hours' => round($totalHours, 2)]);
+    }
+
     public function getAgencyProfile()
     {
         $tenant = \App\Models\Tenant::find(auth()->user()->tenant_id);

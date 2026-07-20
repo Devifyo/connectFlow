@@ -172,7 +172,7 @@ async function closePunchModal() {
     if (pendingAttemptClips.length) {
         const type = isPunchedIn.value ? 'punch_out' : 'punch_in';
         for (const entry of pendingAttemptClips) {
-            queueVideoUpload(entry.blob, type, null, entry.verified);
+            queueVideoUpload(entry.blob, type, null, entry.verified, punchLocation.value);
         }
         pendingAttemptClips = [];
     }
@@ -559,7 +559,7 @@ async function executePunch() {
         }
 
         for (const entry of clips) {
-            queueVideoUpload(entry.blob, type, logId, entry.verified);
+            queueVideoUpload(entry.blob, type, logId, entry.verified, punchLocation.value);
         }
 
         punchSuccessLogId = logId;
@@ -572,7 +572,7 @@ async function executePunch() {
     } catch (e) {
         const type = wasPunchedIn ? 'punch_out' : 'punch_in';
         for (const entry of clips) {
-            queueVideoUpload(entry.blob, type, null, entry.verified);
+            queueVideoUpload(entry.blob, type, null, entry.verified, punchLocation.value);
         }
         punchLocationError.value = e.response?.data?.error || 'Something went wrong. Please try again.';
         punchStep.value = 'location';
@@ -591,7 +591,7 @@ function stopBackgroundRecording() {
     if (punchRecordingActive) {
         stopPunchRecording().then(clip => {
             punchRecordingActive = false;
-            if (clip) queueVideoUpload(clip, punchSuccessType.value, punchSuccessLogId, true);
+            if (clip) queueVideoUpload(clip, punchSuccessType.value, punchSuccessLogId, true, punchLocation.value);
             stopPunchCam();
         });
     } else {
@@ -616,7 +616,7 @@ function startContinuousUpload(type, logId) {
         const clip = await stopPunchRecording();
         punchRecordingActive = false;
         if (clip) {
-            queueVideoUpload(clip, type, logId, true);
+            queueVideoUpload(clip, type, logId, true, punchLocation.value);
         }
         startPunchRecording();
         punchRecordingActive = true;

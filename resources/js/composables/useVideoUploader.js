@@ -28,7 +28,7 @@ function openDB() {
     return dbPromise;
 }
 
-async function persistToQueue(blob, type, timeLogId, verified) {
+async function persistToQueue(blob, type, timeLogId, verified, location) {
     try {
         const db = await openDB();
         const arrayBuffer = await blob.arrayBuffer();
@@ -39,6 +39,7 @@ async function persistToQueue(blob, type, timeLogId, verified) {
             type,
             timeLogId: timeLogId || null,
             verified: verified !== false,
+            location: location || null,
             createdAt: Date.now(),
         });
         return new Promise((resolve, reject) => {
@@ -74,15 +75,15 @@ function sleep(ms) {
     return new Promise(r => setTimeout(r, ms));
 }
 
-async function uploadWithRetry(blob, type, timeLogId, verified, onProgress) {
+async function uploadWithRetry(blob, type, timeLogId, verified, onProgress, location) {
     const useChunked = blob.size > CHUNK_SIZE * 2;
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         try {
             if (useChunked) {
-                await uploadChunked(blob, type, timeLogId, verified, onProgress);
+                await uploadChunked(blob, type, timeLogId, verified, onProgress, location);
             } else {
-                await uploadWhole(blob, type, timeLogId, verified, onProgress);
+                await uploadWhole(blob, type, timeLogId, verified, onProgress, location);
             }
             return true;
         } catch (e) {
@@ -100,12 +101,17 @@ async function uploadWithRetry(blob, type, timeLogId, verified, onProgress) {
     return false;
 }
 
-async function uploadWhole(blob, type, timeLogId, verified, onProgress) {
+async function uploadWhole(blob, type, timeLogId, verified, onProgress, location) {
     const form = new FormData();
     form.append('video', blob, `${type}_${Date.now()}.webm`);
     form.append('type', type);
     if (timeLogId) form.append('time_log_id', String(timeLogId));
     form.append('verified', verified ? '1' : '0');
+    if (location) {
+        form.append('latitude', String(location.lat));
+        form.append('longitude', String(location.lng));
+        if (location.address) form.append('address', location.address);
+    }
 
     await axios.post('/api/face/upload-video', form, {
         timeout: 120000,
@@ -117,7 +123,7 @@ async function uploadWhole(blob, type, timeLogId, verified, onProgress) {
     });
 }
 
-async function uploadChunked(blob, type, timeLogId, verified, onProgress) {
+async function uploadChunked(blob, type, timeLogId, verified, onProgress, location) {
     const totalChunks = Math.ceil(blob.size / CHUNK_SIZE);
     const uploadId = `${type}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
@@ -134,6 +140,11 @@ async function uploadChunked(blob, type, timeLogId, verified, onProgress) {
         form.append('type', type);
         if (timeLogId) form.append('time_log_id', String(timeLogId));
         form.append('verified', verified ? '1' : '0');
+        if (location) {
+            form.append('latitude', String(location.lat));
+            form.append('longitude', String(location.lng));
+            if (location.address) form.append('address', location.address);
+        }
 
         let chunkAttempt = 0;
         while (true) {
@@ -165,7 +176,7 @@ async function processQueue(onProgress) {
         for (const item of items) {
             const blob = new Blob([item.buffer], { type: item.mimeType || 'video/webm' });
             const verified = item.verified !== false;
-            const ok = await uploadWithRetry(blob, item.type, item.timeLogId, verified, onProgress);
+            const ok = await uploadWithRetry(blob, item.type, item.timeLogId, verified, onProgress, item.location);
             if (ok) {
                 await removeFromQueue(item.id);
             }
@@ -190,11 +201,11 @@ export function useVideoUploader() {
         }
     }
 
-    async function queueUpload(blob, type, timeLogId, verified = true) {
+    async function queueUpload(blob, type, timeLogId, verified = true, location = null) {
         if (!blob) return;
 
-        await persistToQueue(blob, type, timeLogId, verified);
-        uploadWithRetry(blob, type, timeLogId, verified, handleProgress).then(async (ok) => {
+        await persistToQueue(blob, type, timeLogId, verified, location);
+        uploadWithRetry(blob, type, timeLogId, verified, handleProgress, location).then(async (ok) => {
             if (ok) {
                 const items = await getAllQueued();
                 const match = items.find(i => i.type === type && i.timeLogId === (timeLogId || null) && i.verified === verified);

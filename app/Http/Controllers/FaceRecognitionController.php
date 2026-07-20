@@ -535,6 +535,9 @@ class FaceRecognitionController extends Controller
             'type' => 'required|in:enrollment,punch_in,punch_out',
             'time_log_id' => 'nullable|integer',
             'verified' => 'nullable|boolean',
+            'latitude' => 'nullable|numeric|between:-90,90',
+            'longitude' => 'nullable|numeric|between:-180,180',
+            'address' => 'nullable|string|max:500',
         ]);
 
         $user = auth()->user();
@@ -548,6 +551,11 @@ class FaceRecognitionController extends Controller
             'file_path' => $path,
             'time_log_id' => $request->time_log_id,
             'verified' => $request->has('verified') ? $request->boolean('verified') : true,
+            'latitude' => $request->latitude,
+            'longitude' => $request->longitude,
+            'address' => $request->address,
+            'ip_address' => $request->ip(),
+            'device' => $request->userAgent(),
         ]);
 
         return response()->json(['status' => 'success']);
@@ -563,6 +571,9 @@ class FaceRecognitionController extends Controller
             'type' => 'required|in:enrollment,punch_in,punch_out',
             'time_log_id' => 'nullable|integer',
             'verified' => 'nullable|boolean',
+            'latitude' => 'nullable|numeric|between:-90,90',
+            'longitude' => 'nullable|numeric|between:-180,180',
+            'address' => 'nullable|string|max:500',
         ]);
 
         $user = auth()->user();
@@ -605,6 +616,11 @@ class FaceRecognitionController extends Controller
                 'file_path' => $finalPath,
                 'time_log_id' => $request->time_log_id,
                 'verified' => $request->has('verified') ? $request->boolean('verified') : true,
+                'latitude' => $request->latitude,
+                'longitude' => $request->longitude,
+                'address' => $request->address,
+                'ip_address' => $request->ip(),
+                'device' => $request->userAgent(),
             ]);
 
             return response()->json(['status' => 'complete']);
@@ -633,6 +649,9 @@ class FaceRecognitionController extends Controller
                 'verified' => (bool) $v->verified,
                 'starred' => (bool) $v->starred,
                 'created_at' => $v->created_at->toIso8601String(),
+                'location' => $v->latitude ? ['lat' => (float) $v->latitude, 'lng' => (float) $v->longitude, 'address' => $v->address] : null,
+                'ip_address' => $v->ip_address,
+                'device' => $v->device,
             ]);
 
         return response()->json(['videos' => $videos]);

@@ -297,6 +297,10 @@ const attMonth = ref(new Date().getMonth() + 1);
 const dayEditOpen = ref(null);
 const dayEditForm = ref({ status: 'present', manual_hours: '', note: '', show_status_to_member: false, show_note_to_member: false });
 const dayEditLoading = ref(false);
+const adminPunchMode = ref(null);
+const adminPunchTime = ref('09:00');
+const adminPunchNote = ref('');
+const adminPunchLoading = ref(false);
 
 function formatHours(h) {
     if (!h || h === 0) return '0h 0m';
@@ -564,6 +568,40 @@ async function removeDayOverride(date) {
         await axios.delete(`/api/admin/bidders/${viewMember.value.id}/attendance`, { data: { date } });
         await fetchMemberAttendance();
     } catch (e) {}
+}
+
+function openAdminPunch(mode) {
+    adminPunchMode.value = mode;
+    adminPunchTime.value = mode === 'in' ? '09:00' : '18:00';
+    adminPunchNote.value = '';
+}
+
+function cancelAdminPunch() {
+    adminPunchMode.value = null;
+}
+
+async function submitAdminPunch() {
+    if (!dayEditOpen.value || !adminPunchMode.value) return;
+    adminPunchLoading.value = true;
+    try {
+        const endpoint = adminPunchMode.value === 'in' ? 'punch-in' : 'punch-out';
+        const payload = {
+            date: dayEditOpen.value,
+            time: adminPunchTime.value,
+            note: adminPunchNote.value || null,
+        };
+        if (adminPunchMode.value === 'out') {
+            const activeSession = selectedDaySessions.value.find(s => !s.out);
+            if (activeSession) payload.log_id = activeSession.log_id;
+        }
+        await axios.post(`/api/admin/bidders/${viewMember.value.id}/${endpoint}`, payload);
+        adminPunchMode.value = null;
+        await fetchMemberAttendance();
+    } catch (e) {
+        alert(e.response?.data?.error || 'Failed to punch');
+    } finally {
+        adminPunchLoading.value = false;
+    }
 }
 
 // --- Announcements ---
@@ -1945,6 +1983,47 @@ onUnmounted(() => {
                                                     class="btn-ghost text-xs text-red-400 hover:text-red-300 px-3 py-1.5">
                                                     Remove Override
                                                 </button>
+                                                <div class="ml-auto flex items-center gap-1.5">
+                                                    <button @click="openAdminPunch('in')"
+                                                        class="inline-flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500/20 transition-colors">
+                                                        <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/></svg>
+                                                        Punch In
+                                                    </button>
+                                                    <button @click="openAdminPunch('out')"
+                                                        class="inline-flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition-colors">
+                                                        <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/></svg>
+                                                        Punch Out
+                                                    </button>
+                                                </div>
+                                            </div>
+
+                                            <!-- Admin Manual Punch -->
+                                            <div v-if="adminPunchMode" class="mt-3 p-3 rounded-lg border transition-colors"
+                                                :class="adminPunchMode === 'in' ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-red-500/5 border-red-500/20'">
+                                                <p class="text-xs font-semibold mb-2" :class="adminPunchMode === 'in' ? 'text-emerald-400' : 'text-red-400'">
+                                                    Manual Punch {{ adminPunchMode === 'in' ? 'In' : 'Out' }}
+                                                    <span v-if="adminPunchMode === 'out' && selectedDaySessions.some(s => !s.out)" class="text-[10px] text-surface-500 font-normal ml-1">
+                                                        (will close active session)
+                                                    </span>
+                                                </p>
+                                                <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                                                    <div>
+                                                        <label class="block text-[10px] font-medium text-surface-500 mb-1">Time (UTC)</label>
+                                                        <input v-model="adminPunchTime" type="time" class="input-field w-full text-xs" />
+                                                    </div>
+                                                    <div class="sm:col-span-2">
+                                                        <label class="block text-[10px] font-medium text-surface-500 mb-1">Note (optional)</label>
+                                                        <input v-model="adminPunchNote" type="text" maxlength="255" class="input-field w-full text-xs" placeholder="Reason for manual punch" />
+                                                    </div>
+                                                </div>
+                                                <div class="flex items-center gap-2 mt-2">
+                                                    <button @click="submitAdminPunch" :disabled="adminPunchLoading"
+                                                        class="text-xs px-4 py-1.5 rounded-lg font-medium transition-colors"
+                                                        :class="adminPunchMode === 'in' ? 'bg-emerald-500 text-white hover:bg-emerald-600' : 'bg-red-500 text-white hover:bg-red-600'">
+                                                        {{ adminPunchLoading ? 'Processing...' : (adminPunchMode === 'in' ? 'Confirm Punch In' : 'Confirm Punch Out') }}
+                                                    </button>
+                                                    <button @click="cancelAdminPunch" class="btn-ghost text-xs px-3 py-1.5">Cancel</button>
+                                                </div>
                                             </div>
 
                                             <!-- Sessions & Locations -->
@@ -2025,23 +2104,43 @@ onUnmounted(() => {
                                                     <svg class="w-3.5 h-3.5 text-surface-500 transition-transform" :class="showFailedAttempts ? 'rotate-180' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5"/></svg>
                                                 </button>
                                                 <div v-if="showFailedAttempts" class="mt-2 space-y-1.5">
-                                                    <div v-for="(fv, fvi) in selectedDayFailedVideos" :key="fv.id" class="flex items-center gap-2 sm:gap-3 text-xs p-2.5 sm:p-3 rounded-lg bg-surface-900/50 border" :class="fv.starred ? 'border-yellow-500/30' : 'border-red-500/10'">
-                                                        <span class="inline-flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-bold bg-red-400/15 text-red-400">{{ fvi + 1 }}</span>
-                                                        <span class="text-[9px] px-1.5 py-0.5 rounded font-medium bg-red-500/10 text-red-400">
-                                                            {{ fv.type === 'punch_in' ? 'In' : 'Out' }}
-                                                        </span>
-                                                        <span class="font-mono text-surface-400">{{ new Date(fv.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}</span>
-                                                        <button @click="openFailedAttemptVideo(fv)" class="p-0.5 rounded text-red-400/70 hover:text-red-400 transition-colors" title="Watch video">
-                                                            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z"/></svg>
-                                                        </button>
-                                                        <div class="flex items-center gap-1.5 ml-auto">
-                                                            <button @click="toggleVideoStar(fv.id)" class="p-0.5 rounded transition-colors" :class="fv.starred ? 'text-yellow-400' : 'text-surface-600 hover:text-yellow-400'" :title="fv.starred ? 'Unstar' : 'Star'">
-                                                                <svg class="w-3.5 h-3.5" :fill="fv.starred ? 'currentColor' : 'none'" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M11.48 3.499a.562.562 0 011.04 0l2.125 5.111a.563.563 0 00.475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 00-.182.557l1.285 5.385a.562.562 0 01-.84.61l-4.725-2.885a.562.562 0 00-.586 0L6.982 20.54a.562.562 0 01-.84-.61l1.285-5.386a.562.562 0 00-.182-.557l-4.204-3.602a.562.562 0 01.321-.988l5.518-.442a.563.563 0 00.475-.345L11.48 3.5z"/></svg>
-                                                            </button>
-                                                            <span class="inline-flex items-center gap-0.5 text-[9px] text-red-400/60">
-                                                                <svg class="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12"/></svg>
-                                                                Failed
+                                                    <div v-for="(fv, fvi) in selectedDayFailedVideos" :key="fv.id" class="p-2.5 sm:p-3 rounded-lg bg-surface-900/50 border" :class="fv.starred ? 'border-yellow-500/30' : 'border-red-500/10'">
+                                                        <div class="flex items-center gap-2 sm:gap-3 text-xs">
+                                                            <span class="inline-flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-bold bg-red-400/15 text-red-400">{{ fvi + 1 }}</span>
+                                                            <span class="text-[9px] px-1.5 py-0.5 rounded font-medium bg-red-500/10 text-red-400">
+                                                                {{ fv.type === 'punch_in' ? 'In' : 'Out' }}
                                                             </span>
+                                                            <span class="font-mono text-surface-400">{{ new Date(fv.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}</span>
+                                                            <button @click="openFailedAttemptVideo(fv)" class="p-0.5 rounded text-red-400/70 hover:text-red-400 transition-colors" title="Watch video">
+                                                                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z"/></svg>
+                                                            </button>
+                                                            <div class="flex items-center gap-1.5 ml-auto">
+                                                                <button @click="toggleVideoStar(fv.id)" class="p-0.5 rounded transition-colors" :class="fv.starred ? 'text-yellow-400' : 'text-surface-600 hover:text-yellow-400'" :title="fv.starred ? 'Unstar' : 'Star'">
+                                                                    <svg class="w-3.5 h-3.5" :fill="fv.starred ? 'currentColor' : 'none'" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M11.48 3.499a.562.562 0 011.04 0l2.125 5.111a.563.563 0 00.475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 00-.182.557l1.285 5.385a.562.562 0 01-.84.61l-4.725-2.885a.562.562 0 00-.586 0L6.982 20.54a.562.562 0 01-.84-.61l1.285-5.386a.562.562 0 00-.182-.557l-4.204-3.602a.562.562 0 01.321-.988l5.518-.442a.563.563 0 00.475-.345L11.48 3.5z"/></svg>
+                                                                </button>
+                                                                <span class="inline-flex items-center gap-0.5 text-[9px] text-red-400/60">
+                                                                    <svg class="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12"/></svg>
+                                                                    Failed
+                                                                </span>
+                                                            </div>
+                                                        </div>
+                                                        <div v-if="fv.location || fv.ip_address" class="mt-2 ml-7">
+                                                            <div v-if="fv.location" class="flex items-start gap-1.5">
+                                                                <svg class="w-3 h-3 text-surface-500 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1 1 15 0Z"/></svg>
+                                                                <div class="min-w-0">
+                                                                    <p class="text-[10px] text-surface-400 truncate" :title="fv.location.address">{{ fv.location.address || `${fv.location.lat}, ${fv.location.lng}` }}</p>
+                                                                    <a :href="`https://www.google.com/maps?q=${fv.location.lat},${fv.location.lng}`" target="_blank"
+                                                                        class="inline-flex items-center gap-1 text-[9px] text-brand hover:underline mt-0.5">
+                                                                        View on map
+                                                                    </a>
+                                                                </div>
+                                                            </div>
+                                                            <div v-if="fv.ip_address || fv.device" class="flex items-center gap-1.5 mt-1 text-[9px] text-surface-500">
+                                                                <svg class="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 17.25v1.007a3 3 0 0 1-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0 1 15 18.257V17.25m6-12V15a2.25 2.25 0 0 1-2.25 2.25H5.25A2.25 2.25 0 0 1 3 15V5.25A2.25 2.25 0 0 1 5.25 3h13.5A2.25 2.25 0 0 1 21 5.25Z"/></svg>
+                                                                <span v-if="fv.ip_address" class="font-mono">{{ fv.ip_address }}</span>
+                                                                <span v-if="fv.ip_address && fv.device" class="text-surface-600">·</span>
+                                                                <span v-if="fv.device" :title="fv.device">{{ parseDevice(fv.device) }}</span>
+                                                            </div>
                                                         </div>
                                                     </div>
                                                 </div>
