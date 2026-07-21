@@ -12,13 +12,14 @@ const videoEl = ref(null);
 let stallTimer = null;
 let fixingDuration = false;
 
-// If the recording is genuinely broken the browser never becomes playable,
-// so it would spin forever. Fall back to an error state after a timeout.
+// Last-resort net for a file that never fires ANY event (not even 'error').
+// Deliberately long: with preload="metadata" the browser may not fire canplay at all
+// until playback starts, so readiness is decided by loadedmetadata, not this timer.
 function armStallTimer() {
     clearStallTimer();
     stallTimer = setTimeout(() => {
         if (status.value === 'loading') status.value = 'error';
-    }, 12000);
+    }, 30000);
 }
 
 function clearStallTimer() {
@@ -63,6 +64,9 @@ function onLoadedMetadata() {
         clearStallTimer();
         return;
     }
+    // Real video dimensions => the file is valid. Show it now; waiting for
+    // canplay/loadeddata would hang under preload="metadata" and falsely flag it corrupt.
+    markReady();
     resolveInfiniteDuration(el);
 }
 
@@ -72,6 +76,9 @@ function onPlayable() {
 }
 
 function onError() {
+    // Once the video has shown as playable, a later hiccup (e.g. the duration-fix seek)
+    // must not relabel a good recording as corrupted.
+    if (status.value === 'ready' || status.value === 'audio-only') return;
     status.value = 'error';
     clearStallTimer();
 }
