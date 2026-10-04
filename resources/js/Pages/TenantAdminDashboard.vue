@@ -300,8 +300,33 @@ const dayEditForm = ref({ status: 'present', manual_hours: '', note: '', show_st
 const dayEditLoading = ref(false);
 const adminPunchMode = ref(null);
 const adminPunchTime = ref('09:00');
+const adminPunchUseNow = ref(true);
 const adminPunchNote = ref('');
 const adminPunchLoading = ref(false);
+const adminPunchSuccess = ref('');
+
+// All attendance times are shown and entered in Indian Standard Time regardless of the admin's device clock.
+const ATTENDANCE_TZ = 'Asia/Kolkata';
+function fmtAttendanceTime(iso) {
+    if (!iso) return '';
+    return new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: ATTENDANCE_TZ });
+}
+function attendanceNowParts() {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+        timeZone: ATTENDANCE_TZ, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+    }).formatToParts(new Date());
+    const get = (t) => parts.find(p => p.type === t)?.value;
+    return { date: `${get('year')}-${get('month')}-${get('day')}`, time: `${get('hour') === '24' ? '00' : get('hour')}:${get('minute')}` };
+}
+const adminPunchIsToday = computed(() => dayEditOpen.value === attendanceNowParts().date);
+const adminPunchPreview = computed(() => {
+    if (!dayEditOpen.value) return '';
+    if (adminPunchUseNow.value && adminPunchIsToday.value) return `now (${fmtAttendanceTime(new Date().toISOString())} IST)`;
+    if (!adminPunchTime.value) return '';
+    const [h, m] = adminPunchTime.value.split(':').map(Number);
+    const d = new Date(Date.UTC(2000, 0, 1, h, m));
+    return `${d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })} IST on ${dayEditOpen.value}`;
+});
 
 function formatHours(h) {
     if (!h || h === 0) return '0h 0m';
@@ -585,7 +610,11 @@ async function removeDayOverride(date) {
 
 function openAdminPunch(mode) {
     adminPunchMode.value = mode;
-    adminPunchTime.value = mode === 'in' ? '09:00' : '18:00';
+    adminPunchSuccess.value = '';
+    const now = attendanceNowParts();
+    // Editing today: default to the live IST clock. Past dates: a sensible shift default the admin must review.
+    adminPunchUseNow.value = dayEditOpen.value === now.date;
+    adminPunchTime.value = adminPunchUseNow.value ? now.time : (mode === 'in' ? '09:00' : '18:00');
     adminPunchNote.value = '';
 }
 
@@ -598,16 +627,19 @@ async function submitAdminPunch() {
     adminPunchLoading.value = true;
     try {
         const endpoint = adminPunchMode.value === 'in' ? 'punch-in' : 'punch-out';
+        const useNow = adminPunchUseNow.value && adminPunchIsToday.value;
         const payload = {
             date: dayEditOpen.value,
-            time: adminPunchTime.value,
+            time: useNow ? null : adminPunchTime.value,
+            now: useNow,
             note: adminPunchNote.value || null,
         };
         if (adminPunchMode.value === 'out') {
             const activeSession = selectedDaySessions.value.find(s => !s.out);
             if (activeSession) payload.log_id = activeSession.log_id;
         }
-        await axios.post(`/api/admin/bidders/${viewMember.value.id}/${endpoint}`, payload);
+        const { data } = await axios.post(`/api/admin/bidders/${viewMember.value.id}/${endpoint}`, payload);
+        adminPunchSuccess.value = `Punch ${adminPunchMode.value === 'in' ? 'in' : 'out'} recorded at ${data.recorded_at}`;
         adminPunchMode.value = null;
         await fetchMemberAttendance();
     } catch (e) {
@@ -2019,16 +2051,25 @@ onUnmounted(() => {
                                                         (will close active session)
                                                     </span>
                                                 </p>
+                                                <div v-if="adminPunchIsToday" class="flex items-center gap-1 mb-2 text-[10px]">
+                                                    <button type="button" @click="adminPunchUseNow = true" class="px-2 py-1 rounded-md border transition-colors"
+                                                        :class="adminPunchUseNow ? 'bg-surface-700 border-surface-500 text-white' : 'border-surface-700/50 text-surface-500 hover:text-surface-300'">Now</button>
+                                                    <button type="button" @click="adminPunchUseNow = false; adminPunchTime = attendanceNowParts().time" class="px-2 py-1 rounded-md border transition-colors"
+                                                        :class="!adminPunchUseNow ? 'bg-surface-700 border-surface-500 text-white' : 'border-surface-700/50 text-surface-500 hover:text-surface-300'">Custom time</button>
+                                                </div>
                                                 <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
                                                     <div>
-                                                        <label class="block text-[10px] font-medium text-surface-500 mb-1">Time (UTC)</label>
-                                                        <input v-model="adminPunchTime" type="time" class="input-field w-full text-xs" />
+                                                        <label class="block text-[10px] font-medium text-surface-500 mb-1">Time (IST)</label>
+                                                        <input v-model="adminPunchTime" type="time" class="input-field w-full text-xs" :disabled="adminPunchUseNow && adminPunchIsToday" :class="{ 'opacity-50': adminPunchUseNow && adminPunchIsToday }" />
                                                     </div>
                                                     <div class="sm:col-span-2">
                                                         <label class="block text-[10px] font-medium text-surface-500 mb-1">Note (optional)</label>
                                                         <input v-model="adminPunchNote" type="text" maxlength="255" class="input-field w-full text-xs" placeholder="Reason for manual punch" />
                                                     </div>
                                                 </div>
+                                                <p class="text-[10px] text-surface-400 mt-2">
+                                                    Will record punch {{ adminPunchMode === 'in' ? 'in' : 'out' }} at <span class="font-mono text-surface-200">{{ adminPunchPreview }}</span>
+                                                </p>
                                                 <div class="flex items-center gap-2 mt-2">
                                                     <button @click="submitAdminPunch" :disabled="adminPunchLoading"
                                                         class="text-xs px-4 py-1.5 rounded-lg font-medium transition-colors"
@@ -2039,14 +2080,16 @@ onUnmounted(() => {
                                                 </div>
                                             </div>
 
+                                            <p v-if="adminPunchSuccess && !adminPunchMode" class="mt-2 text-[10px] text-emerald-400">{{ adminPunchSuccess }}</p>
+
                                             <!-- Sessions & Locations -->
                                             <div v-if="selectedDaySessions.length > 0" class="mt-4 pt-3 border-t border-surface-700/30">
-                                                <p class="text-[10px] font-semibold text-surface-500 uppercase tracking-wider mb-2">Sessions</p>
+                                                <p class="text-[10px] font-semibold text-surface-500 uppercase tracking-wider mb-2">Sessions <span class="normal-case tracking-normal font-normal">(times in IST)</span></p>
                                                 <div class="space-y-3">
                                                     <div v-for="(s, si) in selectedDaySessions" :key="si" class="p-2.5 sm:p-3 rounded-lg bg-surface-900/50 border border-surface-700/20">
                                                         <div class="flex flex-wrap items-center gap-2 sm:gap-3 text-xs">
                                                             <span class="text-surface-500 w-3">{{ si + 1 }}.</span>
-                                                            <span class="font-mono text-emerald-400">{{ s.in ? new Date(s.in).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--' }}</span>
+                                                            <span class="font-mono text-emerald-400">{{ s.in ? fmtAttendanceTime(s.in) : '--' }}</span>
                                                             <button v-if="getSessionVideos(s).punch_in.length" @click="openSessionVideoPopup(s, 'in')" class="p-0.5 rounded transition-colors" :class="getSessionVideos(s).punch_in.some(v => !v.verified) ? 'text-amber-400/70 hover:text-amber-400' : 'text-emerald-400/60 hover:text-emerald-400'" :title="`${getSessionVideos(s).punch_in.length} video(s)`">
                                                                 <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z"/></svg>
                                                             </button>
@@ -2057,7 +2100,7 @@ onUnmounted(() => {
                                                                 <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 10.5l4.72-4.72a.75.75 0 011.28.53v11.38a.75.75 0 01-1.28.53l-4.72-4.72M12 18.75H4.5a2.25 2.25 0 01-2.25-2.25V7.5m1.5-3l16.5 16.5"/></svg>
                                                             </span>
                                                             <svg class="w-3 h-3 text-surface-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>
-                                                            <span class="font-mono" :class="s.out ? 'text-red-400' : 'text-emerald-400'">{{ s.out ? new Date(s.out).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Active' }}</span>
+                                                            <span class="font-mono" :class="s.out ? 'text-red-400' : 'text-emerald-400'">{{ s.out ? fmtAttendanceTime(s.out) : 'Active' }}</span>
                                                             <button v-if="getSessionVideos(s).punch_out.length" @click="openSessionVideoPopup(s, 'out')" class="p-0.5 rounded transition-colors" :class="getSessionVideos(s).punch_out.some(v => !v.verified) ? 'text-amber-400/70 hover:text-amber-400' : 'text-red-400/60 hover:text-red-400'" :title="`${getSessionVideos(s).punch_out.length} video(s)`">
                                                                 <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z"/></svg>
                                                             </button>

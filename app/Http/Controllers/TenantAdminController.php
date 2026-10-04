@@ -520,7 +520,8 @@ class TenantAdminController extends Controller
     {
         $request->validate([
             'date' => 'required|date',
-            'time' => 'required|date_format:H:i',
+            'time' => 'required_unless:now,true|nullable|date_format:H:i',
+            'now' => 'nullable|boolean',
             'note' => 'nullable|string|max:255',
         ]);
 
@@ -534,7 +535,10 @@ class TenantAdminController extends Controller
             return response()->json(['error' => 'User already has an active shift on this date.'], 400);
         }
 
-        $loginTime = Carbon::parse($request->date . ' ' . $request->time, 'UTC');
+        $loginTime = $this->resolveManualPunchTime($request);
+        if ($loginTime->gt(Carbon::now('UTC')->addMinutes(2))) {
+            return response()->json(['error' => 'Punch-in time cannot be in the future. It is now ' . $this->formatAttendanceTime(Carbon::now()) . '.'], 400);
+        }
 
         $log = TimeLog::create([
             'tenant_id' => auth()->user()->tenant_id,
@@ -544,14 +548,19 @@ class TenantAdminController extends Controller
             'punch_in_address' => 'Manual punch by admin' . ($request->note ? ': ' . $request->note : ''),
         ]);
 
-        return response()->json(['status' => 'success', 'log_id' => $log->log_id]);
+        return response()->json([
+            'status' => 'success',
+            'log_id' => $log->log_id,
+            'recorded_at' => $this->formatAttendanceTime($log->login_time),
+        ]);
     }
 
     public function adminPunchOut(Request $request, $userId)
     {
         $request->validate([
             'date' => 'required|date',
-            'time' => 'required|date_format:H:i',
+            'time' => 'required_unless:now,true|nullable|date_format:H:i',
+            'now' => 'nullable|boolean',
             'log_id' => 'nullable|integer',
             'note' => 'nullable|string|max:255',
         ]);
@@ -575,9 +584,14 @@ class TenantAdminController extends Controller
             return response()->json(['error' => 'No active shift found for this user on this date.'], 400);
         }
 
-        $logoutTime = Carbon::parse($request->date . ' ' . $request->time, 'UTC');
+        $logoutTime = $this->resolveManualPunchTime($request);
         if ($logoutTime->lte($log->login_time)) {
             $logoutTime = $logoutTime->addDay();
+        }
+
+        // Guard against stale defaults: a manual punch can never be recorded ahead of the real clock.
+        if ($logoutTime->gt(Carbon::now('UTC')->addMinutes(2))) {
+            return response()->json(['error' => 'Punch-out time cannot be in the future. It is now ' . $this->formatAttendanceTime(Carbon::now()) . '.'], 400);
         }
 
         $totalHours = abs($logoutTime->floatDiffInHours($log->login_time));
@@ -588,7 +602,29 @@ class TenantAdminController extends Controller
             'punch_out_address' => 'Manual punch by admin' . ($request->note ? ': ' . $request->note : ''),
         ]);
 
-        return response()->json(['status' => 'success', 'total_hours' => round($totalHours, 2)]);
+        return response()->json([
+            'status' => 'success',
+            'total_hours' => round($totalHours, 2),
+            'recorded_at' => $this->formatAttendanceTime($logoutTime),
+        ]);
+    }
+
+    /**
+     * Resolve the UTC instant for a manual punch. With `now` set the server clock is used;
+     * otherwise the typed wall-clock time is interpreted in the attendance timezone (IST by default).
+     */
+    private function resolveManualPunchTime(Request $request): Carbon
+    {
+        if ($request->boolean('now')) {
+            return Carbon::now('UTC');
+        }
+
+        return Carbon::parse($request->date . ' ' . $request->time, config('attendance.timezone'))->utc();
+    }
+
+    private function formatAttendanceTime(Carbon $time): string
+    {
+        return $time->copy()->setTimezone(config('attendance.timezone'))->format('h:i A, d M Y T');
     }
 
     public function getAgencyProfile()

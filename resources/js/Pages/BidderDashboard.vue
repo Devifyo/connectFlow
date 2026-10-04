@@ -1953,16 +1953,6 @@ onUnmounted(() => {
                                                     </span>
                                                     <span class="text-surface-500 ml-auto">{{ formatHours(session.hours) }}</span>
                                                 </div>
-                                                <div v-if="session.in_location || session.out_location" class="ml-8 mt-1 space-y-1">
-                                                    <div v-if="session.in_location" class="flex items-center gap-1.5 text-[10px] text-surface-500">
-                                                        <svg class="w-3 h-3 text-emerald-500/60 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1 1 15 0Z"/></svg>
-                                                        <span class="truncate">In: {{ session.in_location.address || `${session.in_location.lat}, ${session.in_location.lng}` }}</span>
-                                                    </div>
-                                                    <div v-if="session.out_location" class="flex items-center gap-1.5 text-[10px] text-surface-500">
-                                                        <svg class="w-3 h-3 text-red-500/60 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1 1 15 0Z"/></svg>
-                                                        <span class="truncate">Out: {{ session.out_location.address || `${session.out_location.lat}, ${session.out_location.lng}` }}</span>
-                                                    </div>
-                                                </div>
                                             </div>
                                         </div>
                                     </td>
@@ -2028,16 +2018,6 @@ onUnmounted(() => {
                                         <svg class="w-3 h-3 text-surface-600 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" /></svg>
                                         <span class="font-mono" :class="session.out ? 'text-surface-300' : 'text-emerald-400'">{{ session.out ? toLocalTimeShort(session.out) : 'Active' }}</span>
                                         <span class="text-surface-500 ml-auto">{{ formatHours(session.hours) }}</span>
-                                    </div>
-                                    <div v-if="session.in_location || session.out_location" class="ml-4 mt-1 space-y-1">
-                                        <div v-if="session.in_location" class="flex items-center gap-1 text-[10px] text-surface-500">
-                                            <svg class="w-3 h-3 text-emerald-500/60 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1 1 15 0Z"/></svg>
-                                            <span class="truncate">{{ session.in_location.address || `${session.in_location.lat}, ${session.in_location.lng}` }}</span>
-                                        </div>
-                                        <div v-if="session.out_location" class="flex items-center gap-1 text-[10px] text-surface-500">
-                                            <svg class="w-3 h-3 text-red-500/60 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1 1 15 0Z"/></svg>
-                                            <span class="truncate">{{ session.out_location.address || `${session.out_location.lat}, ${session.out_location.lng}` }}</span>
-                                        </div>
                                     </div>
                                 </div>
                             </div>
