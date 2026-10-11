@@ -16,6 +16,7 @@ import FaceScanCapture from '@/Components/FaceScanCapture.vue';
 import GlobalMessagePopup from '@/Components/GlobalMessagePopup.vue';
 import { useGlobalMessages } from '@/composables/useGlobalMessages';
 import { useWebcam } from '@/composables/useWebcam';
+import { useFaceMesh } from '@/composables/useFaceMesh';
 import { useVideoUploader } from '@/composables/useVideoUploader';
 import { useStreamingRecorder, resumeStreamQueue } from '@/composables/useStreamingRecorder';
 
@@ -150,36 +151,124 @@ const faceMetricsLabels = [
 ];
 let analyzeInterval = null;
 let metricsInterval = null;
-let continuousUploadInterval = null;
 let delayPunchSuccess = false;
-const { videoRef: punchVideoRef, isStreaming: punchCamStreaming, error: punchCamError, startCamera: startPunchCam, stopCamera: stopPunchCam, captureFrame: capturePunchFrame, startRecording: startPunchRecording, stopRecording: stopPunchRecording, getStream: getPunchStream } = useWebcam();
-const { queueUpload: queueVideoUpload } = useVideoUploader();
-const { start: startPunchStream, stop: stopPunchStream, isActive: isPunchStreaming } = useStreamingRecorder();
+const { videoRef: punchVideoRef, isStreaming: punchCamStreaming, error: punchCamError, recorderError: punchRecorderError, startCamera: startPunchCam, stopCamera: stopPunchCam, captureFrame: capturePunchFrame, startRecording: startPunchRecording, stopRecording: stopPunchRecording, getStream: getPunchStream } = useWebcam();
+
+// Remote diagnostics for the punch camera (phones can't be debugged otherwise). Fire-and-forget.
+function faceLog(event, detail = {}) {
+    try { axios.post('/api/face/client-log', { event, detail }).catch(() => {}); } catch {}
+}
+
+// --- Punch framing: face AND chest must be in view before a punch can be verified ---
+const { faceDetected: punchFaceDetected, faceBox: punchFaceBox, ready: punchMeshReady, init: initPunchMesh, startTracking: startPunchMeshTracking, stopTracking: stopPunchMeshTracking } = useFaceMesh();
+const punchMeshFailed = ref(false);
+const punchFramingStable = ref(false);
+let punchFramingTimer = null;
+let punchFramingOkSince = 0;
+
+const FRAMING_MIN_FACE_H = 0.12;   // face shorter than this is too far away to recognise
+const FRAMING_MAX_FACE_H = 0.42;   // taller than this cannot leave room for the chest
+const FRAMING_CHEST_RATIO = 1.5;   // room below the chin, in face-heights, needed for the chest
+
+const punchFraming = computed(() => {
+    if (!punchMeshReady.value || punchMeshFailed.value) return { ok: true, code: 'unchecked', message: '' };
+    const box = punchFaceBox.value;
+    if (!punchFaceDetected.value || !box) return { ok: false, code: 'no_face', message: 'Face not detected. Look at the camera.' };
+    const faceH = box.bottom - box.top;
+    const centerX = (box.left + box.right) / 2;
+    const roomBelow = 1 - box.bottom;
+    if (box.top < 0.02) return { ok: false, code: 'cut_top', message: 'Your head is cut off. Tilt the camera up a little.' };
+    if (faceH < FRAMING_MIN_FACE_H) return { ok: false, code: 'too_far', message: 'Move a little closer to the camera.' };
+    if (faceH > FRAMING_MAX_FACE_H || roomBelow < FRAMING_CHEST_RATIO * faceH) return { ok: false, code: 'no_chest', message: 'Move back a little.' };
+    if (centerX < 0.22 || centerX > 0.78) return { ok: false, code: 'off_center', message: 'Center yourself in the frame.' };
+    return { ok: true, code: 'ok', message: 'Good framing. Hold still.' };
+});
+
+function startPunchFramingWatch() {
+    stopPunchFramingWatch();
+    punchFramingOkSince = 0;
+    punchFramingStable.value = false;
+    punchFramingTimer = setInterval(() => {
+        if (punchFraming.value.ok) {
+            if (!punchFramingOkSince) punchFramingOkSince = Date.now();
+            punchFramingStable.value = Date.now() - punchFramingOkSince >= 700;
+        } else {
+            punchFramingOkSince = 0;
+            punchFramingStable.value = false;
+        }
+    }, 150);
+}
+
+function stopPunchFramingWatch() {
+    if (punchFramingTimer) { clearInterval(punchFramingTimer); punchFramingTimer = null; }
+    punchFramingStable.value = false;
+}
+
+async function startPunchFramingCheck() {
+    punchMeshFailed.value = false;
+    try {
+        await initPunchMesh();
+        if (punchVideoRef.value) startPunchMeshTracking(punchVideoRef.value);
+        startPunchFramingWatch();
+    } catch {
+        // Model failed to load (offline?). The server still enforces framing on the captured frames.
+        punchMeshFailed.value = true;
+    }
+}
+
+function stopPunchFramingCheck() {
+    stopPunchFramingWatch();
+    stopPunchMeshTracking();
+}
+const { queueUpload: queueVideoUpload, uploadProgress: punchUploadProgress, activeUploads: punchActiveUploads, waitForUploads: waitForPunchUploads } = useVideoUploader(props.auth?.user?.id || null);
+const punchClosing = ref(false);
+const { start: startPunchStream, stop: stopPunchStream, setMeta: setPunchStreamMeta, isActive: isPunchStreaming, stats: punchStreamStats } = useStreamingRecorder(props.auth?.user?.id || null);
 
 function onFaceEnrolled() {
     faceEnrolled.value = true;
     router.reload({ only: ['face_recognition'] });
 }
 
-let punchRecordingActive = false;
-let pendingAttemptClips = [];
+let punchRecordingActive = false;   // fallback single whole-clip recorder (browsers that can't record webm)
 const punchMapRef = ref(null);
 
 async function closePunchModal() {
-    if (punchRecordingActive) {
-        const clip = await stopPunchRecording();
-        punchRecordingActive = false;
-        if (clip) pendingAttemptClips.push({ blob: clip, verified: false });
-    }
-    if (pendingAttemptClips.length) {
-        const type = isPunchedIn.value ? 'punch_out' : 'punch_in';
-        for (const entry of pendingAttemptClips) {
-            queueVideoUpload(entry.blob, type, null, entry.verified, punchLocation.value);
-        }
-        pendingAttemptClips = [];
-    }
-    stopPunchCam();
+    stopPunchFramingCheck();
+    // Whatever was recorded so far (failed attempts included) is kept as an unverified recording.
+    stopBackgroundRecording();
     showPunchModal.value = false;
+}
+
+// --- Punch recording lifecycle -------------------------------------------------------------
+// ONE recorder per camera session, started the moment the camera is on and stopped only when the
+// user presses Close (or cancels). On iOS/WebKit a second recorder on the same stream records
+// nothing, so stop/restart cycles are never used. The recorder streams slices live; the server
+// row is created on the first slice and linked/verified once the punch succeeds.
+let punchRecStartedAt = 0;
+function punchTrackSnapshot() {
+    return (getPunchStream()?.getTracks() || []).map(t => `${t.kind}:${t.readyState}${t.muted ? ':muted' : ''}${t.enabled ? '' : ':disabled'}`);
+}
+
+function beginPunchRecording() {
+    const type = isPunchedIn.value ? 'punch_out' : 'punch_in';
+    punchRecStartedAt = Date.now();
+    // Diagnostics: iOS has been seen to mute the microphone mid-punch, which froze the recorder's clock.
+    (getPunchStream()?.getTracks() || []).forEach(t => {
+        ['mute', 'unmute', 'ended'].forEach(ev => t.addEventListener(ev, () => faceLog('track_' + ev, { kind: t.kind, at: Math.round((Date.now() - punchRecStartedAt) / 1000), tracks: punchTrackSnapshot() })));
+    });
+    const uploadId = startPunchStream(getPunchStream(), { type, timeLogId: null, verified: false, location: punchLocation.value });
+    if (uploadId) {
+        punchRecordingActive = false;
+        faceLog('stream_start', { uploadId });
+        return;
+    }
+    // No webm recording support: keep a single whole-clip recorder for the whole session instead.
+    punchRecordingActive = startPunchRecording();
+    faceLog('fallback_start', { started: punchRecordingActive, err: punchRecorderError.value });
+}
+
+function markPunchRecordingVerified(type, logId) {
+    if (isPunchStreaming()) setPunchStreamMeta({ type, timeLogId: logId, verified: true });
 }
 
 const formattedElapsed = computed(() => {
@@ -302,8 +391,8 @@ async function confirmPunch() {
         punchStep.value = 'face';
         faceError.value = '';
         await startPunchCam();
-        startPunchRecording();
-        punchRecordingActive = true;
+        beginPunchRecording();
+        startPunchFramingCheck();
         return;
     }
 
@@ -459,8 +548,13 @@ function detectBackgroundFilter(videoEl) {
 }
 
 async function verifyAndPunch() {
+    if (!punchFraming.value.ok) {
+        faceError.value = punchFraming.value.message;
+        return;
+    }
     faceVerifying.value = true;
     faceError.value = '';
+    faceLog('verify_click', { at: Math.round((Date.now() - punchRecStartedAt) / 1000), tracks: punchTrackSnapshot(), rec: punchStreamStats() });
 
     const filterDetected = await detectBackgroundFilter(punchVideoRef.value);
     if (filterDetected) {
@@ -493,6 +587,7 @@ async function verifyAndPunch() {
     }
 
     if (verified) {
+        stopPunchFramingCheck();
         faceVerifying.value = false;
         faceAnalyzing.value = true;
         faceAnalyzePhase.value = 0;
@@ -513,27 +608,16 @@ async function verifyAndPunch() {
         faceVerified.value = true;
         punchSuccess.value = true;
         startFaceMetrics();
-        startContinuousUpload(punchSuccessType.value, punchSuccessLogId);
         return;
     }
 
-    const clip = punchRecordingActive ? await stopPunchRecording() : null;
-    punchRecordingActive = false;
-
-    if (clip) {
-        pendingAttemptClips.push({ blob: clip, verified: false });
-    }
-
-    startPunchRecording();
-    punchRecordingActive = true;
+    // Failed attempt: the recorder keeps running; the attempt stays part of this punch's recording.
     faceVerifying.value = false;
 }
 
 async function executePunch() {
     punchLoading.value = true;
     const wasPunchedIn = isPunchedIn.value;
-    const clips = [...pendingAttemptClips];
-    pendingAttemptClips = [];
 
     try {
         const payload = {
@@ -560,22 +644,15 @@ async function executePunch() {
             startClock(punchedInAt.value);
         }
 
-        for (const entry of clips) {
-            queueVideoUpload(entry.blob, type, logId, entry.verified, punchLocation.value);
-        }
-
         punchSuccessLogId = logId;
         punchSuccessType.value = type;
+        // From here on every slice (and the final finalize) carries the punch id and verified flag.
+        markPunchRecordingVerified(type, logId);
         if (!delayPunchSuccess) {
             punchSuccess.value = true;
             startFaceMetrics();
-            startContinuousUpload(type, logId);
         }
     } catch (e) {
-        const type = wasPunchedIn ? 'punch_out' : 'punch_in';
-        for (const entry of clips) {
-            queueVideoUpload(entry.blob, type, null, entry.verified, punchLocation.value);
-        }
         punchLocationError.value = e.response?.data?.error || 'Something went wrong. Please try again.';
         punchStep.value = 'location';
     } finally {
@@ -584,21 +661,56 @@ async function executePunch() {
 }
 
 async function closeSuccessModal() {
+    if (punchClosing.value) return;
+    punchClosing.value = true;
+    stopPunchFramingCheck();
     stopFaceMetrics();
+    // Recording runs for as long as the confirmation modal is open. Closing it ends the
+    // recording, then the modal stays up (with a progress ring) until every recorded clip has
+    // reached the server, so a user can't walk away with video still on the phone.
+    // Both waits are bounded so the user can never be stuck on the spinner: anything not sent by
+    // then stays queued on the phone and resumes next time the app opens.
+    const t0 = Date.now();
+    try {
+        await Promise.race([stopBackgroundRecording(), new Promise(r => setTimeout(r, 90000))]);
+        const t1 = Date.now();
+        const drained = await waitForPunchUploads(30000);
+        faceLog('close', { stopMs: t1 - t0, waitMs: Date.now() - t1, drained, pending: punchActiveUploads.value });
+    } catch {}
+    punchClosing.value = false;
     showPunchModal.value = false;
 }
 
-function stopBackgroundRecording() {
-    stopContinuousUpload();
-    if (isPunchStreaming()) {
-        stopPunchStream().then(() => stopPunchCam());
-    } else if (punchRecordingActive) {
-        stopPunchRecording().then(clip => {
+// The punch modal swaps between three <video> elements (verify, analysing, success). Each swap
+// mounts a fresh element with no srcObject, so the preview went black while the camera kept
+// recording. Re-attach the live stream whenever the visible element changes.
+watch([faceAnalyzing, punchSuccess, punchStep, showPunchModal, punchCamError], async () => {
+    await nextTick();
+    const el = punchVideoRef.value;
+    const stream = getPunchStream();
+    if (!el || !stream || !showPunchModal.value) return;
+    if (el.srcObject !== stream) {
+        el.srcObject = stream;
+        try { await el.play(); } catch {}
+    }
+});
+
+async function stopBackgroundRecording() {
+    try {
+        if (isPunchStreaming()) {
+            const tracksBefore = punchTrackSnapshot();
+            const result = await stopPunchStream(() => stopPunchCam());
+            faceLog('stream_stop', { ...(result || {}), tracksBefore });
+        } else if (punchRecordingActive) {
             punchRecordingActive = false;
-            if (clip) queueVideoUpload(clip, punchSuccessType.value, punchSuccessLogId, true, punchLocation.value);
-            stopPunchCam();
-        });
-    } else {
+            const clip = await stopPunchRecording();
+            faceLog('fallback_clip', { size: clip?.size || 0, err: punchRecorderError.value });
+            if (clip) {
+                const type = punchSuccessType.value || (isPunchedIn.value ? 'punch_out' : 'punch_in');
+                await queueVideoUpload(clip, type, punchSuccessLogId, !!punchSuccessLogId, punchLocation.value);
+            }
+        }
+    } finally {
         stopPunchCam();
     }
 }
@@ -612,37 +724,6 @@ function startFaceMetrics() {
 
 function stopFaceMetrics() {
     if (metricsInterval) { clearInterval(metricsInterval); metricsInterval = null; }
-}
-
-async function startContinuousUpload(type, logId) {
-    // Stop the pre-success attempt recorder and hand its clip off to the uploader...
-    if (punchRecordingActive) {
-        const clip = await stopPunchRecording();
-        punchRecordingActive = false;
-        if (clip) queueVideoUpload(clip, type, logId, true, punchLocation.value);
-    }
-    // ...then stream the rest live (webm browsers). Chunks land on the server as they're
-    // recorded, so a fast close still leaves a valid video and the admin sees no stuck loader.
-    const streamId = startPunchStream(getPunchStream(), { type, timeLogId: logId, verified: true, location: punchLocation.value });
-    if (streamId) return;
-
-    // iOS Safari records mp4 (can't be streamed) — fall back to periodic whole-clip uploads.
-    startPunchRecording();
-    punchRecordingActive = true;
-    continuousUploadInterval = setInterval(() => flushPunchClip(type, logId), 8000);
-}
-
-async function flushPunchClip(type, logId) {
-    if (!punchRecordingActive) return;
-    const clip = await stopPunchRecording();
-    punchRecordingActive = false;
-    if (clip) queueVideoUpload(clip, type, logId, true, punchLocation.value);
-    startPunchRecording();
-    punchRecordingActive = true;
-}
-
-function stopContinuousUpload() {
-    if (continuousUploadInterval) { clearInterval(continuousUploadInterval); continuousUploadInterval = null; }
 }
 
 // --- URL Checker ---
@@ -1021,7 +1102,7 @@ const profileFaceStep = ref('idle');
 const profileFaceEnrolling = ref(false);
 const profileFaceError = ref('');
 const profileFaceSuccess = ref(false);
-const { queueUpload: queueProfileFaceUpload } = useVideoUploader();
+const { queueUpload: queueProfileFaceUpload } = useVideoUploader(props.auth?.user?.id || null);
 
 function resetProfileFace() {
     profileFaceStep.value = 'idle';
@@ -1183,7 +1264,7 @@ onMounted(() => {
     startHeartbeat();
     initGlobalMessages();
     // Re-send any streamed punch chunks that didn't finish uploading before a previous close.
-    resumeStreamQueue();
+    resumeStreamQueue(props.auth?.user?.id || null);
     if (props.auth.user?.id && window.Echo) {
         window.Echo.private(`messages.${props.auth.user.id}`)
             .listen('.message.sent', handleIncomingMessage)
@@ -2441,7 +2522,226 @@ onUnmounted(() => {
 
         <!-- Punch In/Out Modal -->
         <Teleport to="body">
-            <div v-if="showPunchModal" class="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 backdrop-blur-sm" @click.self="!faceAnalyzing && closePunchModal();">
+            <div v-if="showPunchModal" class="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 backdrop-blur-sm" @click.self="punchClosing ? null : (punchSuccess ? closeSuccessModal() : (!faceAnalyzing && closePunchModal()));">
+                <div class="bg-surface-900 border border-surface-700/50 rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
+                    <!-- Header -->
+                    <div v-if="!punchSuccess && !faceAnalyzing" class="px-6 py-4 border-b border-surface-800/50 flex items-center justify-between">
+                        <div>
+                            <h3 class="text-base font-semibold text-surface-100">{{ isPunchedIn ? 'Punch Out' : 'Punch In' }}</h3>
+                            <p class="text-xs text-surface-500 mt-0.5">
+                                {{ punchStep === 'face' ? 'Verify your identity' : `Confirm your location to ${isPunchedIn ? 'end' : 'start'} your shift` }}
+                            </p>
+                        </div>
+                        <!-- Step indicator when face is required -->
+                        <div v-if="faceEnabled && faceEnrolled" class="flex items-center gap-1.5 mr-3">
+                            <div class="w-2 h-2 rounded-full" :class="punchStep === 'location' ? 'bg-brand' : 'bg-brand/30'"></div>
+                            <div class="w-2 h-2 rounded-full" :class="punchStep === 'face' ? 'bg-brand' : 'bg-brand/30'"></div>
+                        </div>
+                        <button @click="closePunchModal();" class="text-surface-500 hover:text-surface-300 transition-colors">
+                            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+                            </svg>
+                        </button>
+                    </div>
+
+                    <!-- Body: Location Step -->
+                    <div v-show="punchStep === 'location' && !punchSuccess" class="px-6 py-5">
+                        <!-- Locating spinner -->
+                        <div v-if="punchLocating" class="flex flex-col items-center gap-3 py-8">
+                            <div class="w-10 h-10 border-3 border-surface-600 border-t-brand rounded-full animate-spin"></div>
+                            <p class="text-sm text-surface-400">Detecting your location...</p>
+                        </div>
+
+                        <!-- Error state -->
+                        <div v-else-if="punchLocationError" class="text-center py-6">
+                            <div class="w-12 h-12 rounded-full bg-red-500/10 flex items-center justify-center mx-auto mb-3">
+                                <svg class="w-6 h-6 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/>
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1 1 15 0Z"/>
+                                </svg>
+                            </div>
+                            <p class="text-sm text-red-400 mb-3">{{ punchLocationError }}</p>
+
+                            <!-- Denied: show instructions -->
+                            <div v-if="punchLocationDenied" class="text-left mx-auto max-w-xs mb-4">
+                                <p class="text-xs text-surface-400 mb-2">To enable location access:</p>
+                                <ol class="text-xs text-surface-500 space-y-1.5 list-decimal list-inside">
+                                    <li>Click the <span class="text-surface-300 font-medium">lock/site settings icon</span> in the address bar</li>
+                                    <li>Find <span class="text-surface-300 font-medium">Location</span> and set to <span class="text-emerald-400 font-medium">Allow</span></li>
+                                    <li>Click <span class="text-surface-300 font-medium">Try Again</span> below</li>
+                                </ol>
+                            </div>
+
+                            <button @click="requestLocation" class="btn-secondary text-xs px-4 py-2">
+                                Try Again
+                            </button>
+                        </div>
+
+                        <!-- Location found -->
+                        <div v-else-if="punchLocation">
+                            <!-- Map -->
+                            <div ref="punchMapRef" class="w-full h-48 rounded-xl bg-surface-800 overflow-hidden mb-4"></div>
+
+                            <!-- Address -->
+                            <div class="flex items-start gap-3 p-3 rounded-xl bg-surface-800/50 border border-surface-700/30">
+                                <svg class="w-5 h-5 text-brand flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/>
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1 1 15 0Z"/>
+                                </svg>
+                                <div class="min-w-0 flex-1">
+                                    <p class="text-xs font-medium text-surface-300">Your Location</p>
+                                    <p class="text-[11px] text-surface-500 mt-0.5 leading-relaxed">{{ punchLocation.address || `${punchLocation.lat.toFixed(5)}, ${punchLocation.lng.toFixed(5)}` }}</p>
+                                </div>
+                            </div>
+
+                            <!-- Current time -->
+                            <div class="flex items-center gap-3 mt-3 p-3 rounded-xl bg-surface-800/50 border border-surface-700/30">
+                                <svg class="w-5 h-5 text-surface-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/>
+                                </svg>
+                                <div>
+                                    <p class="text-xs font-medium text-surface-300">{{ isPunchedIn ? 'Shift Duration' : 'Current Time' }}</p>
+                                    <p class="text-[11px] text-surface-500 mt-0.5">{{ isPunchedIn ? formattedElapsed : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Body: Face Verification Step -->
+                    <div v-if="punchStep === 'face'" class="px-6 py-5">
+                        <div v-if="punchCamError && !faceAnalyzing && !punchSuccess" class="text-center py-6">
+                            <div class="w-12 h-12 rounded-full bg-red-500/10 flex items-center justify-center mx-auto mb-3">
+                                <svg class="w-6 h-6 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
+                                </svg>
+                            </div>
+                            <p class="text-sm text-red-400 mb-3">{{ punchCamError }}</p>
+                            <button @click="startPunchCam" class="btn-secondary text-xs px-4 py-2">Try Again</button>
+                        </div>
+
+                        <template v-else>
+                            <!-- ONE persistent <video> for the whole punch. It stays mounted and playing from
+                                 verification through the confirmation. Replacing or hiding it mid-recording made iOS
+                                 stop the microphone and freeze the recorder's clock, which cut every recording at the
+                                 verify step. The analysing and success panels are OPAQUE overlays drawn on top of it,
+                                 so the user sees no camera preview there while the recording keeps running. -->
+                            <div class="relative rounded-xl overflow-hidden bg-black mb-4">
+                                <video ref="punchVideoRef" class="w-full" autoplay playsinline muted></video>
+
+                                <!-- Verify HUD -->
+                                <template v-if="!faceAnalyzing && !punchSuccess">
+                                    <div class="absolute inset-0 pointer-events-none">
+                                        <div class="absolute top-2 left-2 flex items-center gap-1.5 bg-black/50 backdrop-blur-sm px-2 py-1 rounded-full">
+                                            <div class="w-1.5 h-1.5 rounded-full" :class="punchFraming.code === 'unchecked' ? 'bg-brand' : (punchFraming.ok ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse')"></div>
+                                            <span class="text-[9px] font-medium uppercase tracking-wide" :class="punchFraming.code === 'unchecked' ? 'text-brand' : (punchFraming.ok ? 'text-emerald-300' : 'text-amber-300')">
+                                                {{ punchFraming.code === 'unchecked' ? 'Camera' : (punchFraming.ok ? 'Ready' : 'Adjust position') }}
+                                            </span>
+                                        </div>
+                                    </div>
+                                    <div v-if="!punchCamStreaming" class="absolute inset-0 flex items-center justify-center bg-surface-900">
+                                        <div class="w-8 h-8 border-2 border-brand/30 border-t-brand rounded-full animate-spin"></div>
+                                    </div>
+                                </template>
+
+                                <!-- Analysing overlay (opaque: no camera preview; 10s processing after API verified) -->
+                                <div v-else-if="faceAnalyzing" class="absolute inset-0 bg-emerald-950 pointer-events-none overflow-hidden">
+                                    <!-- Scanning circle -->
+                                    <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-44 h-44 sm:w-52 sm:h-52">
+                                        <div class="absolute inset-0 rounded-full border-2 border-cyan-400/40 animate-pulse"></div>
+                                        <div class="absolute inset-[-8px] rounded-full border border-cyan-400/20 animate-spin" style="animation-duration:4s;border-top-color:rgb(34 211 238 / 0.6);"></div>
+                                    </div>
+                                    <!-- Scan line -->
+                                    <div class="absolute left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-cyan-400/60 to-transparent animate-scan-line"></div>
+                                    <!-- Corner markers -->
+                                    <div class="absolute top-3 left-3 w-6 h-6 border-t-2 border-l-2 border-cyan-400/50"></div>
+                                    <div class="absolute top-3 right-3 w-6 h-6 border-t-2 border-r-2 border-cyan-400/50"></div>
+                                    <div class="absolute bottom-3 left-3 w-6 h-6 border-b-2 border-l-2 border-cyan-400/50"></div>
+                                    <div class="absolute bottom-3 right-3 w-6 h-6 border-b-2 border-r-2 border-cyan-400/50"></div>
+                                    <!-- Crosshair dots -->
+                                    <div class="absolute top-[35%] left-[38%] w-1.5 h-1.5 rounded-full bg-cyan-400/70 animate-pulse"></div>
+                                    <div class="absolute top-[35%] left-[58%] w-1.5 h-1.5 rounded-full bg-cyan-400/70 animate-pulse" style="animation-delay:0.3s;"></div>
+                                    <div class="absolute top-[50%] left-[48%] w-1.5 h-1.5 rounded-full bg-cyan-400/70 animate-pulse" style="animation-delay:0.6s;"></div>
+                                    <div class="absolute top-[60%] left-[48%] w-1 h-3 rounded-full bg-cyan-400/30 animate-pulse" style="animation-delay:0.9s;"></div>
+                                    <!-- Status overlay -->
+                                    <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-surface-950/95 to-transparent p-4">
+                                        <div class="flex items-center gap-2.5">
+                                            <div class="w-4 h-4 border-2 border-cyan-400/30 border-t-cyan-400 rounded-full animate-spin"></div>
+                                            <p class="text-xs font-medium text-cyan-300 transition-all duration-500">{{ faceAnalyzeLabels[Math.min(faceAnalyzePhase, faceAnalyzeLabels.length - 1)] }}</p>
+                                        </div>
+                                        <!-- Progress bar -->
+                                        <div class="mt-2 h-1 bg-surface-800 rounded-full overflow-hidden">
+                                            <div class="h-full bg-gradient-to-r from-cyan-500 to-brand rounded-full transition-all duration-1000 ease-linear" :style="{ width: Math.min((faceAnalyzePhase + 1) / faceAnalyzeLabels.length * 100, 100) + '%' }"></div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Success overlay (opaque: no camera preview; recording continues until Close) -->
+                                <div v-else class="absolute inset-0 bg-emerald-950 pointer-events-none">
+                                    <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-44 h-44 sm:w-52 sm:h-52 rounded-full border-2 border-emerald-400/60"></div>
+                                    <div class="absolute inset-0 bg-emerald-500/10 flex items-center justify-center">
+                                        <div class="bg-surface-900/80 backdrop-blur-sm rounded-2xl px-5 py-4 text-center">
+                                            <div class="w-10 h-10 rounded-full bg-emerald-500/20 flex items-center justify-center mx-auto mb-2">
+                                                <svg class="w-5 h-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="m4.5 12.75 6 6 9-13.5"/></svg>
+                                            </div>
+                                            <p class="text-sm font-semibold text-emerald-400">Identity Verified</p>
+                                            <p class="text-xs text-surface-300 mt-1">{{ punchSuccessType === 'punch_in' ? 'Punched in' : 'Punched out' }} successfully</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <template v-if="!faceAnalyzing && !punchSuccess">
+                                <p class="text-xs text-center mb-2 transition-colors" :class="punchFraming.ok && punchFraming.code === 'ok' ? 'text-emerald-400' : 'text-surface-400'">
+                                    {{ punchFraming.code === 'unchecked' || punchFraming.code === 'ok' ? 'Whole face to be visible' : punchFraming.message }}
+                                </p>
+                                <div v-if="faceError" class="p-2.5 rounded-lg bg-red-500/10 border border-red-500/20 mb-3">
+                                    <p class="text-xs text-red-400 text-center">{{ faceError }}</p>
+                                </div>
+                            </template>
+                            <p v-else-if="faceAnalyzing" class="text-[10px] text-surface-500 text-center">Please keep looking at the camera. Do not move.</p>
+                        </template>
+                    </div>
+
+                    <!-- Success without a face step (face recognition disabled for the tenant) -->
+                    <div v-if="punchSuccess && punchStep !== 'face'" class="px-6 py-5">
+                        <div class="relative rounded-xl overflow-hidden bg-emerald-950 mb-4 aspect-[4/3]">
+                            <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-44 h-44 sm:w-52 sm:h-52 rounded-full border-2 border-emerald-400/60"></div>
+                            <div class="absolute inset-0 bg-emerald-500/10 flex items-center justify-center">
+                                <div class="bg-surface-900/80 backdrop-blur-sm rounded-2xl px-5 py-4 text-center">
+                                    <div class="w-10 h-10 rounded-full bg-emerald-500/20 flex items-center justify-center mx-auto mb-2">
+                                        <svg class="w-5 h-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="m4.5 12.75 6 6 9-13.5"/></svg>
+                                    </div>
+                                    <p class="text-sm font-semibold text-emerald-400">Identity Verified</p>
+                                    <p class="text-xs text-surface-300 mt-1">{{ punchSuccessType === 'punch_in' ? 'Punched in' : 'Punched out' }} successfully</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Footer -->
+                    <div class="px-6 py-4 border-t border-surface-800/50 flex items-center justify-end gap-3 flex-shrink-0">
+                        <button @click="resetProfileFace(); showProfileModal = false" class="px-4 py-2 text-sm font-medium text-surface-400 hover:text-surface-200 transition-colors">Cancel</button>
+                        <button v-if="profileTab === 'profile'" @click="saveProfile" :disabled="savingProfile || !profileForm.name.trim()"
+                            class="px-5 py-2 text-sm font-medium bg-brand hover:bg-brand-light disabled:opacity-40 text-surface-950 rounded-xl transition-colors flex items-center gap-2">
+                            <div v-if="savingProfile" class="w-3.5 h-3.5 border-2 border-surface-950/30 border-t-surface-950 rounded-full animate-spin"></div>
+                            Save Profile
+                        </button>
+                        <button v-else-if="profileTab === 'password'" @click="savePassword" :disabled="savingPassword || !passwordForm.current_password || !passwordForm.password || !passwordForm.password_confirmation"
+                            class="px-5 py-2 text-sm font-medium bg-brand hover:bg-brand-light disabled:opacity-40 text-surface-950 rounded-xl transition-colors flex items-center gap-2">
+                            <div v-if="savingPassword" class="w-3.5 h-3.5 border-2 border-surface-950/30 border-t-surface-950 rounded-full animate-spin"></div>
+                            Update Password
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </Teleport>
+
+        <!-- Face Enrollment Modal (blocking) -->
+        <FaceEnrollmentModal v-if="showFaceEnrollment" @enrolled="onFaceEnrolled" />
+
+        <!-- Punch In/Out Modal -->
+        <Teleport to="body">
+            <div v-if="showPunchModal" class="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 backdrop-blur-sm" @click.self="punchClosing ? null : (punchSuccess ? closeSuccessModal() : (!faceAnalyzing && closePunchModal()));">
                 <div class="bg-surface-900 border border-surface-700/50 rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
                     <!-- Header -->
                     <div v-if="!punchSuccess && !faceAnalyzing" class="px-6 py-4 border-b border-surface-800/50 flex items-center justify-between">
@@ -2540,8 +2840,11 @@ onUnmounted(() => {
 
                         <!-- Analyzing phase (10s fake processing after API verified) -->
                         <div v-else-if="faceAnalyzing">
-                            <div class="relative rounded-xl overflow-hidden bg-black mb-4">
-                                <video ref="punchVideoRef" class="w-full" autoplay playsinline muted></video>
+                            <!-- No visible camera preview during analysis (recording continues in the background).
+                                 The hidden <video> keeps the camera stream attached to a same-sized consumer: on
+                                 iOS, removing the only preview element mid-recording restarts the recorder's muxer. -->
+                            <div class="relative rounded-xl overflow-hidden bg-emerald-950/60 mb-4 aspect-[4/3]">
+                                <video ref="punchVideoRef" class="absolute inset-0 w-full h-full object-cover opacity-0 pointer-events-none" autoplay playsinline muted></video>
                                 <div class="absolute inset-0 pointer-events-none overflow-hidden">
                                     <!-- Scanning circle -->
                                     <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-44 h-44 sm:w-52 sm:h-52">
@@ -2581,13 +2884,20 @@ onUnmounted(() => {
                             <div class="relative rounded-xl overflow-hidden bg-black mb-4">
                                 <video ref="punchVideoRef" class="w-full" autoplay playsinline muted></video>
                                 <div class="absolute inset-0 pointer-events-none">
-                                    <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-44 h-44 sm:w-52 sm:h-52 rounded-full border-2 border-brand/40"></div>
+                                    <div class="absolute top-2 left-2 flex items-center gap-1.5 bg-black/50 backdrop-blur-sm px-2 py-1 rounded-full">
+                                        <div class="w-1.5 h-1.5 rounded-full" :class="punchFraming.code === 'unchecked' ? 'bg-brand' : (punchFraming.ok ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse')"></div>
+                                        <span class="text-[9px] font-medium uppercase tracking-wide" :class="punchFraming.code === 'unchecked' ? 'text-brand' : (punchFraming.ok ? 'text-emerald-300' : 'text-amber-300')">
+                                            {{ punchFraming.code === 'unchecked' ? 'Camera' : (punchFraming.ok ? 'Ready' : 'Adjust position') }}
+                                        </span>
+                                    </div>
                                 </div>
                                 <div v-if="!punchCamStreaming" class="absolute inset-0 flex items-center justify-center bg-surface-900">
                                     <div class="w-8 h-8 border-2 border-brand/30 border-t-brand rounded-full animate-spin"></div>
                                 </div>
                             </div>
-                            <p class="text-xs text-surface-500 text-center mb-2">Look at the camera to verify your identity</p>
+                            <p class="text-xs text-center mb-2 transition-colors" :class="punchFraming.ok && punchFraming.code === 'ok' ? 'text-emerald-400' : 'text-surface-400'">
+                                {{ punchFraming.code === 'unchecked' || punchFraming.code === 'ok' ? 'Whole face to be visible' : punchFraming.message }}
+                            </p>
                             <div v-if="faceError" class="p-2.5 rounded-lg bg-red-500/10 border border-red-500/20 mb-3">
                                 <p class="text-xs text-red-400 text-center">{{ faceError }}</p>
                             </div>
@@ -2596,8 +2906,11 @@ onUnmounted(() => {
 
                     <!-- Body: Success State (camera still recording) -->
                     <div v-if="punchSuccess" class="px-6 py-5">
-                        <div class="relative rounded-xl overflow-hidden bg-black mb-4">
-                            <video ref="punchVideoRef" class="w-full" autoplay playsinline muted></video>
+                        <!-- No visible camera preview here by design: the recording keeps running in the background
+                             until the user presses Close, but the user only sees the confirmation. The hidden
+                             <video> keeps the stream attached to a consumer (see the analysing view). -->
+                        <div class="relative rounded-xl overflow-hidden bg-emerald-950/60 mb-4 aspect-[4/3]">
+                            <video ref="punchVideoRef" class="absolute inset-0 w-full h-full object-cover opacity-0 pointer-events-none" autoplay playsinline muted></video>
                             <div class="absolute inset-0 pointer-events-none">
                                 <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-44 h-44 sm:w-52 sm:h-52 rounded-full border-2 border-emerald-400/60"></div>
                             </div>
@@ -2616,7 +2929,8 @@ onUnmounted(() => {
                     <!-- Footer -->
                     <div v-if="!faceAnalyzing" class="px-6 py-4 border-t border-surface-800/50 flex items-center justify-end gap-3">
                         <template v-if="punchSuccess">
-                            <button @click="closeSuccessModal" class="px-5 py-2.5 rounded-xl text-xs font-semibold transition-all duration-200 bg-surface-700 text-surface-200 hover:bg-surface-600 active:scale-95">
+                            <div v-if="punchClosing" class="w-8 h-8 rounded-full border-[3px] border-emerald-400/20 border-t-emerald-400 animate-spin"></div>
+                            <button v-else @click="closeSuccessModal" class="px-5 py-2.5 rounded-xl text-xs font-semibold transition-all duration-200 bg-surface-700 text-surface-200 hover:bg-surface-600 active:scale-95">
                                 Close
                             </button>
                         </template>
@@ -2642,7 +2956,7 @@ onUnmounted(() => {
                             <!-- Face step button -->
                             <button v-if="punchStep === 'face'"
                                 @click="verifyAndPunch"
-                                :disabled="!punchCamStreaming || faceVerifying"
+                                :disabled="!punchCamStreaming || faceVerifying || (punchFraming.code !== 'unchecked' && !punchFramingStable)"
                                 class="px-5 py-2.5 rounded-xl text-xs font-semibold transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed"
                                 :class="isPunchedIn
                                     ? 'bg-red-500 text-white hover:bg-red-600 active:scale-95'

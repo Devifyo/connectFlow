@@ -28,33 +28,17 @@ function openDB() {
     return dbPromise;
 }
 
-// Only upload recordings that actually contain a decodable video track.
-// A recording stopped too early (before the first keyframe) can end up audio-only
-// or truncated; those would spin the admin player forever, so we drop them here.
-function blobHasVideo(blob) {
-    return new Promise((resolve) => {
-        if (!blob || blob.size < 1024) { resolve(false); return; }
-        let settled = false;
-        const video = document.createElement('video');
-        const url = URL.createObjectURL(blob);
-        const finish = (result) => {
-            if (settled) return;
-            settled = true;
-            clearTimeout(timer);
-            try { video.removeAttribute('src'); video.load(); } catch {}
-            URL.revokeObjectURL(url);
-            resolve(result);
-        };
-        const timer = setTimeout(() => finish(false), 5000);
-        video.preload = 'metadata';
-        video.muted = true;
-        video.onloadedmetadata = () => finish(video.videoWidth > 0 && video.videoHeight > 0);
-        video.onerror = () => finish(false);
-        video.src = url;
-    });
+// Recordings are validated SERVER-side (ffprobe) after upload. Checking playability in the
+// browser proved unreliable on iOS (webm blobs may never fire loadedmetadata) and silently
+// dropped good clips, so the client only rejects obviously empty blobs.
+const MIN_BLOB_BYTES = 1024;
+const QUEUE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+function newUploadId(type) {
+    return `${type}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-async function persistToQueue(blob, type, timeLogId, verified, location) {
+async function persistToQueue(blob, type, timeLogId, verified, location, uploadId, ownerId) {
     try {
         const db = await openDB();
         const arrayBuffer = await blob.arrayBuffer();
@@ -66,6 +50,11 @@ async function persistToQueue(blob, type, timeLogId, verified, location) {
             timeLogId: timeLogId || null,
             verified: verified !== false,
             location: location || null,
+            // Stable id so an interrupted upload RESUMES on the server instead of creating a duplicate.
+            uploadId,
+            // Who recorded it. The queue lives in the browser, so after admin impersonation the next
+            // logged-in user must not upload someone else's clip under their own name.
+            ownerId: ownerId || null,
             createdAt: Date.now(),
         });
         return new Promise((resolve, reject) => {
@@ -103,13 +92,13 @@ function sleep(ms) {
     return new Promise(r => setTimeout(r, ms));
 }
 
-async function uploadWithRetry(blob, type, timeLogId, verified, onProgress, location) {
+async function uploadWithRetry(blob, type, timeLogId, verified, onProgress, location, uploadId) {
     const useChunked = blob.size > CHUNK_SIZE * 2;
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         try {
             if (useChunked) {
-                await uploadChunked(blob, type, timeLogId, verified, onProgress, location);
+                await uploadChunked(blob, type, timeLogId, verified, onProgress, location, uploadId);
             } else {
                 await uploadWhole(blob, type, timeLogId, verified, onProgress, location);
             }
@@ -155,10 +144,10 @@ async function uploadWhole(blob, type, timeLogId, verified, onProgress, location
     });
 }
 
-async function uploadChunked(blob, type, timeLogId, verified, onProgress, location) {
+async function uploadChunked(blob, type, timeLogId, verified, onProgress, location, uploadId) {
     const totalChunks = Math.ceil(blob.size / CHUNK_SIZE);
     const ext = extFor(blob);
-    const uploadId = `${type}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    uploadId = uploadId || newUploadId(type);
 
     for (let i = 0; i < totalChunks; i++) {
         const start = i * CHUNK_SIZE;
@@ -183,7 +172,16 @@ async function uploadChunked(blob, type, timeLogId, verified, onProgress, locati
         let chunkAttempt = 0;
         while (true) {
             try {
-                await axios.post('/api/face/upload-video-chunk', form, { timeout: 60000 });
+                const { data } = await axios.post('/api/face/upload-video-chunk', form, { timeout: 60000 });
+                // Resuming: the server already holds this chunk (and maybe more). Skip ahead to the
+                // first missing one instead of re-sending everything.
+                if (data && data.status === 'duplicate' && Number.isInteger(data.last_seq) && data.last_seq > i) {
+                    i = data.last_seq;
+                }
+                if (data && (data.status === 'complete' || data.status === 'dropped')) {
+                    if (onProgress) onProgress({ status: 'uploading', progress: 100 });
+                    return;
+                }
                 break;
             } catch (e) {
                 const status = e?.response?.status;
@@ -202,20 +200,46 @@ async function uploadChunked(blob, type, timeLogId, verified, onProgress, locati
 
 let processingQueue = false;
 
-async function processQueue(onProgress) {
+// Number of clips currently being sent (shared across all uploader instances on the page),
+// so the punch modal can hold its Close button until everything recorded is on the server.
+const activeUploads = ref(0);
+
+function waitForUploads(timeoutMs = 120000) {
+    return new Promise((resolve) => {
+        const started = Date.now();
+        const tick = () => {
+            if (activeUploads.value <= 0 || Date.now() - started >= timeoutMs) { resolve(activeUploads.value <= 0); return; }
+            setTimeout(tick, 200);
+        };
+        tick();
+    });
+}
+
+async function processQueue(onProgress, ownerId) {
     if (processingQueue) return;
     processingQueue = true;
     try {
         const items = await getAllQueued();
         for (const item of items) {
+            // Recorded by a different account in this same browser (admin impersonation): leave it for
+            // that account, unless it is so old nobody will come back for it.
+            if (item.ownerId && ownerId && item.ownerId !== ownerId) {
+                if (Date.now() - (item.createdAt || 0) > QUEUE_MAX_AGE_MS) await removeFromQueue(item.id);
+                continue;
+            }
             const blob = new Blob([item.buffer], { type: item.mimeType || 'video/webm' });
-            if (!(await blobHasVideo(blob))) {
-                // Corrupt/audio-only leftover — drop it so it doesn't retry forever.
+            if (blob.size < MIN_BLOB_BYTES) {
                 await removeFromQueue(item.id);
                 continue;
             }
             const verified = item.verified !== false;
-            const ok = await uploadWithRetry(blob, item.type, item.timeLogId, verified, onProgress, item.location);
+            activeUploads.value++;
+            let ok = false;
+            try {
+                ok = await uploadWithRetry(blob, item.type, item.timeLogId, verified, onProgress, item.location, item.uploadId || newUploadId(item.type));
+            } finally {
+                activeUploads.value--;
+            }
             if (ok) {
                 await removeFromQueue(item.id);
             }
@@ -225,7 +249,7 @@ async function processQueue(onProgress) {
     }
 }
 
-export function useVideoUploader() {
+export function useVideoUploader(ownerId = null) {
     const uploadStatus = ref('idle');
     const uploadProgress = ref(0);
     let active = true;
@@ -241,30 +265,39 @@ export function useVideoUploader() {
     }
 
     async function queueUpload(blob, type, timeLogId, verified = true, location = null) {
-        if (!blob) return;
+        if (!blob || blob.size < MIN_BLOB_BYTES) return;
 
-        // Persist FIRST so a fast browser-close (right after punch) can't lose the clip —
-        // it stays queued and re-uploads next time the app opens. Validation drops
-        // unplayable recordings both here and in processQueue.
-        const queueId = await persistToQueue(blob, type, timeLogId, verified, location);
+        // Count it as in flight immediately (before any await) so a waitForUploads() started
+        // right after this call sees it.
+        activeUploads.value++;
+        const uploadId = newUploadId(type);
 
-        if (!(await blobHasVideo(blob))) {
-            if (queueId != null) await removeFromQueue(queueId);
-            return;
+        try {
+            // Persist FIRST so a fast browser-close (right after punch) can't lose the clip —
+            // it stays queued and resumes (same upload id) next time the app opens. IndexedDB on
+            // some phones can stall, so never let persistence block the upload itself.
+            const queueId = await Promise.race([
+                persistToQueue(blob, type, timeLogId, verified, location, uploadId, ownerId),
+                new Promise(r => setTimeout(() => r(null), 5000)),
+            ]);
+
+            uploadWithRetry(blob, type, timeLogId, verified, handleProgress, location, uploadId)
+                .then(async (ok) => {
+                    if (ok && queueId != null) {
+                        await removeFromQueue(queueId);
+                    }
+                })
+                .finally(() => { activeUploads.value--; });
+        } catch {
+            activeUploads.value--;
         }
-
-        uploadWithRetry(blob, type, timeLogId, verified, handleProgress, location).then(async (ok) => {
-            if (ok && queueId != null) {
-                await removeFromQueue(queueId);
-            }
-        });
     }
 
     onUnmounted(() => {
         active = false;
     });
 
-    processQueue(handleProgress);
+    processQueue(handleProgress, ownerId);
 
-    return { uploadStatus, uploadProgress, queueUpload };
+    return { uploadStatus, uploadProgress, queueUpload, activeUploads, waitForUploads };
 }

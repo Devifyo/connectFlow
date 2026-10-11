@@ -8,6 +8,7 @@ use App\Models\FaceVideo;
 use App\Models\Tenant;
 use App\Models\User;
 use App\Services\DeepStackService;
+use App\Services\FaceVideoFinalizer;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Http;
@@ -93,16 +94,27 @@ class FaceRecognitionController extends Controller
         $bestConfidence = 0;
         $bestMatchUserId = null;
         $faceDetected = false;
+        $framingError = null;
 
         foreach ($request->images as $image) {
             $result = $deepstack->recognizeFace($image);
 
             if (!$result['success']) continue;
 
+            $imageSize = $this->imageDimensions($image);
+
             foreach ($result['predictions'] ?? [] as $prediction) {
                 if (!str_starts_with($prediction['userid'], $tenantPrefix)) continue;
 
                 $faceDetected = true;
+
+                // Punches must show the face AND the chest. Reject frames where the face is too close
+                // or sits too low for the upper body to be in view, even if recognition would pass.
+                $framing = $this->checkUpperBodyFraming($prediction, $imageSize);
+                if ($framing !== null) {
+                    $framingError = $framing;
+                    continue;
+                }
 
                 if ($prediction['confidence'] > $bestConfidence) {
                     $bestConfidence = $prediction['confidence'];
@@ -135,6 +147,10 @@ class FaceRecognitionController extends Controller
             ]);
         }
 
+        if ($framingError) {
+            return response()->json(['verified' => false, 'error' => $framingError]);
+        }
+
         if ($bestConfidence > 0) {
             return response()->json([
                 'verified' => false,
@@ -146,6 +162,47 @@ class FaceRecognitionController extends Controller
             'verified' => false,
             'error' => 'Face not recognized. Please re-enroll your face from Profile settings.',
         ]);
+    }
+
+    /**
+     * Width/height of a base64 data-URL image, or null if it cannot be read.
+     */
+    private function imageDimensions(string $base64): ?array
+    {
+        if (str_contains($base64, ',')) {
+            $base64 = explode(',', $base64, 2)[1];
+        }
+        $raw = base64_decode($base64, true);
+        if (!$raw) return null;
+        $info = @getimagesizefromstring($raw);
+        if (!$info || empty($info[0]) || empty($info[1])) return null;
+        return ['width' => (int) $info[0], 'height' => (int) $info[1]];
+    }
+
+    /**
+     * Returns an error message when the face box leaves no room for the chest below it, or null when
+     * the framing is acceptable. Mirrors the client-side rule so the check cannot be skipped.
+     */
+    private function checkUpperBodyFraming(array $prediction, ?array $imageSize): ?string
+    {
+        if (!$imageSize || !isset($prediction['y_min'], $prediction['y_max'])) {
+            return null; // No geometry available: fall back to the client-side gate only.
+        }
+
+        $h = $imageSize['height'];
+        $faceHeight = ($prediction['y_max'] - $prediction['y_min']) / $h;
+        $roomBelow = ($h - $prediction['y_max']) / $h;
+
+        if ($faceHeight <= 0) return null;
+
+        // The client gate requires ~1.5 face-heights of room below the chin. DeepStack's box runs taller than
+        // the landmark box, so this server check is deliberately looser: it only catches frames where the
+        // face clearly fills the view (no room for a chest at all) and the client gate was bypassed.
+        if ($faceHeight > 0.5 || $roomBelow < 1.0 * $faceHeight) {
+            return 'Move back a little so your whole face and upper body are in the frame.';
+        }
+
+        return null;
     }
 
     private function detectFilterServerSide(string $base64First, string $base64Last): bool
@@ -544,7 +601,15 @@ class FaceRecognitionController extends Controller
         $dir = "face-videos/{$user->tenant_id}/{$user->id}";
         $path = $request->file('video')->store($dir, 'local');
 
-        $path = $this->finalizeVideoFile($path);
+        $finalizer = app(FaceVideoFinalizer::class);
+        $path = $finalizer->finalize($path);
+
+        // Recordings without a video track (camera never produced frames) are useless to the admin
+        // and would spin the player forever, so they are dropped here rather than stored.
+        if (!$finalizer->hasVideoStream($path)) {
+            Storage::disk('local')->delete($path);
+            return response()->json(['status' => 'dropped']);
+        }
 
         FaceVideo::create([
             'tenant_id' => $user->tenant_id,
@@ -563,56 +628,9 @@ class FaceRecognitionController extends Controller
         return response()->json(['status' => 'success']);
     }
 
-    // Recordings from MediaRecorder often have no duration marker and non-monotonic
-    // timestamps, so browsers show duration=Infinity or play only the first frame and stall.
-    // A plain remux (`-c copy`) can't fix the baked-in timestamps, so we RE-ENCODE to a clean,
-    // faststart H.264/AAC mp4 that plays and seeks everywhere. Returns the (possibly new .mp4)
-    // relative path; on any failure the original path is returned unchanged.
     private function finalizeVideoFile(string $relativePath): string
     {
-        try {
-            $full = Storage::disk('local')->path($relativePath);
-            if (!is_file($full) || filesize($full) < 1024) {
-                return $relativePath;
-            }
-
-            $dir = trim(dirname($relativePath), '.');
-            $name = pathinfo($relativePath, PATHINFO_FILENAME);
-            $newRel = ($dir !== '' ? $dir . '/' : '') . $name . '.mp4';
-            $newFull = Storage::disk('local')->path($newRel);
-            $tmp = $newFull . '.tmp.mp4';
-
-            $cmd = sprintf(
-                'ffmpeg -y -loglevel error -fflags +genpts -i %s -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -movflags +faststart %s',
-                escapeshellarg($full), escapeshellarg($tmp)
-            );
-            exec($cmd . ' 2>/dev/null', $out, $code);
-
-            if ($code === 0 && is_file($tmp) && filesize($tmp) > 1024) {
-                @rename($tmp, $newFull);
-                if ($newFull !== $full) {
-                    @unlink($full);
-                }
-                return $newRel;
-            }
-
-            // Re-encode failed (e.g. audio-only clip). Drop the temp and at least remux for duration.
-            if (is_file($tmp)) {
-                @unlink($tmp);
-            }
-            $ext = strtolower(pathinfo($relativePath, PATHINFO_EXTENSION)) === 'mp4' ? 'mp4' : 'webm';
-            $remux = $full . '.fix.' . $ext;
-            exec(sprintf('ffmpeg -y -loglevel error -i %s -c copy -f %s %s 2>/dev/null',
-                escapeshellarg($full), $ext, escapeshellarg($remux)), $o2, $c2);
-            if ($c2 === 0 && is_file($remux) && filesize($remux) > 1024) {
-                @rename($remux, $full);
-            } elseif (is_file($remux)) {
-                @unlink($remux);
-            }
-            return $relativePath;
-        } catch (\Throwable $e) {
-            return $relativePath;
-        }
+        return app(FaceVideoFinalizer::class)->finalize($relativePath);
     }
 
     public function uploadVideoChunk(Request $request)
@@ -651,7 +669,14 @@ class FaceRecognitionController extends Controller
 
         $lastSeq = is_file($seqPath) ? (int) file_get_contents($seqPath) : -1;
 
-        // Idempotent, strictly ordered append (tolerates client retries / re-sends).
+        // A row for this upload id may already exist: the client resumes interrupted uploads with the
+        // same id (re-sending chunk 0), and abandoned uploads may have been finalized meanwhile.
+        $existing = FaceVideo::where('user_id', $user->id)
+            ->where('file_path', 'like', "{$dir}/{$uploadId}.%")
+            ->first();
+
+        // Idempotent, strictly ordered append (tolerates client retries / re-sends). The client
+        // reads last_seq from a duplicate response and jumps straight to the next missing chunk.
         if ($chunkIndex <= $lastSeq) {
             return response()->json(['status' => 'duplicate', 'last_seq' => $lastSeq]);
         }
@@ -663,19 +688,23 @@ class FaceRecognitionController extends Controller
 
         if ($chunkIndex === 0) {
             file_put_contents($fullPath, $bytes);
-            FaceVideo::create([
-                'tenant_id' => $user->tenant_id,
-                'user_id' => $user->id,
-                'type' => $request->type,
-                'file_path' => $finalPath,
-                'time_log_id' => $request->time_log_id,
-                'verified' => $request->has('verified') ? $request->boolean('verified') : true,
-                'latitude' => $request->latitude,
-                'longitude' => $request->longitude,
-                'address' => $request->address,
-                'ip_address' => $request->ip(),
-                'device' => $request->userAgent(),
-            ]);
+            if (!$existing) {
+                $existing = FaceVideo::create([
+                    'tenant_id' => $user->tenant_id,
+                    'user_id' => $user->id,
+                    'type' => $request->type,
+                    'file_path' => $finalPath,
+                    'time_log_id' => $request->time_log_id,
+                    'verified' => $request->has('verified') ? $request->boolean('verified') : true,
+                    'latitude' => $request->latitude,
+                    'longitude' => $request->longitude,
+                    'address' => $request->address,
+                    'ip_address' => $request->ip(),
+                    'device' => $request->userAgent(),
+                ]);
+            } elseif ($request->filled('time_log_id') && !$existing->time_log_id) {
+                $existing->update(['time_log_id' => $request->time_log_id]);
+            }
         } else {
             file_put_contents($fullPath, $bytes, FILE_APPEND);
         }
@@ -684,15 +713,11 @@ class FaceRecognitionController extends Controller
 
         if ($chunkIndex === $totalChunks - 1) {
             @unlink($seqPath);
-            $newPath = $this->finalizeVideoFile($finalPath);
-            if ($newPath !== $finalPath) {
-                FaceVideo::where('file_path', $finalPath)->where('user_id', $user->id)
-                    ->update(['file_path' => $newPath]);
-            }
-            return response()->json(['status' => 'complete']);
+            $ok = app(FaceVideoFinalizer::class)->completeUpload($existing, $finalPath);
+            return response()->json(['status' => $ok ? 'complete' : 'dropped', 'last_seq' => $chunkIndex]);
         }
 
-        return response()->json(['status' => 'chunk_received', 'chunk_index' => $chunkIndex]);
+        return response()->json(['status' => 'chunk_received', 'chunk_index' => $chunkIndex, 'last_seq' => $chunkIndex]);
     }
 
     // Live streaming upload: the recorder pushes each ~2s webm chunk as it is produced and
@@ -702,7 +727,7 @@ class FaceRecognitionController extends Controller
     public function streamVideoChunk(Request $request)
     {
         $request->validate([
-            'chunk' => 'required|file|max:4096',
+            'chunk' => 'required|file|max:65536',
             'upload_id' => 'required|string|max:100',
             'seq' => 'required|integer|min:0',
             'type' => 'required|in:enrollment,punch_in,punch_out',
@@ -726,6 +751,14 @@ class FaceRecognitionController extends Controller
 
         $lastSeq = is_file($seqPath) ? (int) file_get_contents($seqPath) : -1;
 
+        $row = FaceVideo::where('user_id', $user->id)
+            ->where('file_path', 'like', "{$dir}/{$uploadId}.%")
+            ->first();
+
+        // The recording starts before the punch exists and is verified mid-stream, so every slice
+        // may carry a newer time_log_id / verified flag than the row was created with.
+        $this->applyStreamMeta($row, $request);
+
         // Idempotent, strictly ordered append (handles retries and re-sends on reopen).
         if ($seq <= $lastSeq) {
             return response()->json(['status' => 'duplicate', 'last_seq' => $lastSeq]);
@@ -738,19 +771,21 @@ class FaceRecognitionController extends Controller
 
         if ($seq === 0) {
             file_put_contents($fullFile, $bytes);
-            FaceVideo::create([
-                'tenant_id' => $user->tenant_id,
-                'user_id' => $user->id,
-                'type' => $request->type,
-                'file_path' => $file,
-                'time_log_id' => $request->time_log_id,
-                'verified' => $request->has('verified') ? $request->boolean('verified') : true,
-                'latitude' => $request->latitude,
-                'longitude' => $request->longitude,
-                'address' => $request->address,
-                'ip_address' => $request->ip(),
-                'device' => $request->userAgent(),
-            ]);
+            if (!$row) {
+                FaceVideo::create([
+                    'tenant_id' => $user->tenant_id,
+                    'user_id' => $user->id,
+                    'type' => $request->type,
+                    'file_path' => $file,
+                    'time_log_id' => $request->time_log_id,
+                    'verified' => $request->has('verified') ? $request->boolean('verified') : true,
+                    'latitude' => $request->latitude,
+                    'longitude' => $request->longitude,
+                    'address' => $request->address,
+                    'ip_address' => $request->ip(),
+                    'device' => $request->userAgent(),
+                ]);
+            }
         } else {
             file_put_contents($fullFile, $bytes, FILE_APPEND);
         }
@@ -760,38 +795,75 @@ class FaceRecognitionController extends Controller
         return response()->json(['status' => 'ok', 'last_seq' => $seq]);
     }
 
+    /** Link the row to its punch and mark it verified as soon as the client says so (never unsets). */
+    private function applyStreamMeta(?FaceVideo $row, Request $request): void
+    {
+        if (!$row) return;
+        $changes = [];
+        if ($request->filled('time_log_id') && !$row->time_log_id) {
+            $changes['time_log_id'] = (int) $request->time_log_id;
+        }
+        if ($request->has('verified') && $request->boolean('verified') && !$row->verified) {
+            $changes['verified'] = true;
+        }
+        if ($changes) $row->update($changes);
+    }
+
     public function streamVideoFinalize(Request $request)
     {
         $request->validate([
             'upload_id' => 'required|string|max:100',
             'time_log_id' => 'nullable|integer',
+            'verified' => 'nullable|boolean',
         ]);
 
         $user = auth()->user();
         $uploadId = preg_replace('/[^a-zA-Z0-9_\-]/', '', $request->upload_id);
-        $file = "face-videos/{$user->tenant_id}/{$user->id}/{$uploadId}.webm";
+        $dir = "face-videos/{$user->tenant_id}/{$user->id}";
+        $file = "{$dir}/{$uploadId}.webm";
 
-        if ($request->filled('time_log_id')) {
-            FaceVideo::where('file_path', $file)
-                ->where('user_id', $user->id)
-                ->update(['time_log_id' => (int) $request->time_log_id]);
-        }
+        $row = FaceVideo::where('user_id', $user->id)
+            ->where('file_path', 'like', "{$dir}/{$uploadId}.%")
+            ->first();
+        $this->applyStreamMeta($row, $request);
 
         @unlink(Storage::disk('local')->path("face-video-chunks/{$user->id}/{$uploadId}.seq"));
 
-        // Live-streamed file needs re-encoding to be natively playable/seekable.
-        $newFile = $this->finalizeVideoFile($file);
-        if ($newFile !== $file) {
-            FaceVideo::where('file_path', $file)->where('user_id', $user->id)
-                ->update(['file_path' => $newFile]);
+        if (!Storage::disk('local')->exists($file)) {
+            return response()->json(['status' => 'nothing_to_finalize']);
         }
 
-        return response()->json(['status' => 'finalized']);
+        // Live-streamed file needs re-encoding to be natively playable/seekable.
+        $ok = app(FaceVideoFinalizer::class)->completeUpload($row, $file);
+
+        return response()->json(['status' => $ok ? 'finalized' : 'dropped']);
+    }
+
+    /**
+     * Diagnostics from the punch camera flow on the employee's device (recorder errors, clip sizes,
+     * timings). Phones cannot be debugged remotely otherwise. Fire-and-forget from the client.
+     */
+    public function clientLog(Request $request)
+    {
+        $request->validate([
+            'event' => 'required|string|max:60',
+            'detail' => 'nullable|array',
+        ]);
+        $user = auth()->user();
+        Log::info(sprintf('[face-client] user %d %s %s', $user->id, $request->event, json_encode($request->detail ?? [])), [
+            'ua' => substr((string) $request->userAgent(), 0, 120),
+        ]);
+        return response()->json(['ok' => true]);
     }
 
     public function memberVideos(Request $request, $userId)
     {
         $user = User::findOrFail($userId);
+        $finalizer = app(FaceVideoFinalizer::class);
+
+        // Uploads abandoned by the employee's phone (locked screen, closed tab) are finalized here so
+        // the admin gets a playable partial recording instead of a spinner that never resolves.
+        $finalizer->finalizeStaleUploads($user->id, $user->tenant_id);
 
         $query = FaceVideo::where('user_id', $user->id);
 
@@ -808,6 +880,7 @@ class FaceRecognitionController extends Controller
                 'time_log_id' => $v->time_log_id,
                 'verified' => (bool) $v->verified,
                 'starred' => (bool) $v->starred,
+                'uploading' => $finalizer->isUploading($v->user_id, pathinfo($v->file_path, PATHINFO_FILENAME)),
                 'created_at' => $v->created_at->toIso8601String(),
                 'location' => $v->latitude ? ['lat' => (float) $v->latitude, 'lng' => (float) $v->longitude, 'address' => $v->address] : null,
                 'ip_address' => $v->ip_address,

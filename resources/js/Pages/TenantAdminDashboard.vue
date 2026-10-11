@@ -467,12 +467,15 @@ function getSessionVideos(session) {
 
     const inNoVideo = pinAll.length === 0 && !!session.in;
     const outNoVideo = poutAll.length === 0 && !!session.out;
+    // A row whose file is still being appended to by the phone is shown as pending, not as a video.
+    const inUploading = pinAll.length > 0 && pinAll.every(v => v.uploading);
+    const outUploading = poutAll.length > 0 && poutAll.every(v => v.uploading);
 
     return {
-        punch_in: pinAll,
-        punch_out: poutAll,
-        punch_in_pending: inNoVideo && recent(session.in),
-        punch_out_pending: outNoVideo && recent(session.out),
+        punch_in: pinAll.filter(v => !v.uploading),
+        punch_out: poutAll.filter(v => !v.uploading),
+        punch_in_pending: (inNoVideo && recent(session.in)) || inUploading,
+        punch_out_pending: (outNoVideo && recent(session.out)) || outUploading,
         punch_in_missing: inNoVideo && !recent(session.in),
         punch_out_missing: outNoVideo && !recent(session.out),
     };
@@ -525,7 +528,9 @@ function stopVideoPoll() {
     }
 }
 
-const failedAttemptVideos = computed(() => memberFaceVideos.value.filter(v => (v.type === 'punch_in' || v.type === 'punch_out') && !v.time_log_id).sort((a, b) => new Date(b.created_at) - new Date(a.created_at)));
+// A recording still streaming from the phone is unverified/unlinked until the punch succeeds; it is
+// not a failed attempt yet, so it is excluded here while `uploading`.
+const failedAttemptVideos = computed(() => memberFaceVideos.value.filter(v => (v.type === 'punch_in' || v.type === 'punch_out') && !v.time_log_id && !v.uploading).sort((a, b) => new Date(b.created_at) - new Date(a.created_at)));
 const showFailedAttempts = ref(false);
 
 const selectedDayFailedVideos = computed(() => {

@@ -134,6 +134,7 @@ Route::middleware('auth')->group(function () {
     Route::post('/api/face/stream-video-chunk', [\App\Http\Controllers\FaceRecognitionController::class, 'streamVideoChunk']);
     Route::post('/api/face/stream-video-finalize', [\App\Http\Controllers\FaceRecognitionController::class, 'streamVideoFinalize']);
     Route::get('/api/face/video/{id}', [\App\Http\Controllers\FaceRecognitionController::class, 'streamVideo']);
+    Route::post('/api/face/client-log', [\App\Http\Controllers\FaceRecognitionController::class, 'clientLog']);
 
     // Global Messages (recipient side)
     Route::get('/api/global-messages/pending', [\App\Http\Controllers\GlobalMessageController::class, 'pending']);

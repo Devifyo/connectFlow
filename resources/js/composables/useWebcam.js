@@ -60,8 +60,11 @@ export function useWebcam() {
         return canvas.toDataURL('image/jpeg', 0.85);
     }
 
+    // Last recorder failure, for diagnostics ("" when the last start succeeded).
+    const recorderError = ref('');
+
     function startRecording() {
-        if (!stream) return;
+        if (!stream) { recorderError.value = 'no stream'; return false; }
         // Discard any still-running session so two recorders never share the stream.
         if (activeSession && activeSession.recorder.state !== 'inactive') {
             try { activeSession.recorder.stop(); } catch {}
@@ -76,10 +79,15 @@ export function useWebcam() {
             recorder.ondataavailable = (e) => {
                 if (e.data && e.data.size > 0) chunks.push(e.data);
             };
+            recorder.onerror = (e) => { recorderError.value = 'recorder error: ' + (e?.error?.name || e?.name || 'unknown'); };
             recorder.start(100);
-            activeSession = { recorder, chunks, type: recorder.mimeType || mimeType || 'video/webm' };
+            activeSession = { recorder, chunks, type: recorder.mimeType || mimeType || 'video/webm', startedAt: Date.now() };
+            recorderError.value = '';
+            return true;
         } catch (e) {
             activeSession = null;
+            recorderError.value = (e && (e.name + ': ' + e.message)) || 'start failed';
+            return false;
         }
     }
 
@@ -96,13 +104,18 @@ export function useWebcam() {
             const { recorder, chunks } = session;
             const blobType = (session.type || 'video/webm').split(';')[0];
             const buildBlob = () => (chunks.length > 0 ? new Blob(chunks, { type: blobType }) : null);
+            let settled = false;
+            const finish = () => { if (settled) return; settled = true; clearTimeout(guard); resolve(buildBlob()); };
 
             if (recorder.state === 'inactive') {
-                resolve(buildBlob());
+                finish();
                 return;
             }
 
-            recorder.onstop = () => resolve(buildBlob());
+            // Some mobile recorders never fire onstop; return whatever was captured instead of hanging.
+            const guard = setTimeout(() => { recorderError.value = 'onstop timeout'; finish(); }, 3000);
+            recorder.onstop = finish;
+            recorder.onerror = finish;
 
             try {
                 recorder.requestData();
@@ -111,12 +124,12 @@ export function useWebcam() {
             try {
                 recorder.stop();
             } catch {
-                resolve(buildBlob());
+                finish();
             }
         });
     }
 
     onUnmounted(() => stopCamera());
 
-    return { videoRef, isStreaming, error, startCamera, stopCamera, captureFrame, startRecording, stopRecording, getStream: () => stream };
+    return { videoRef, isStreaming, error, recorderError, startCamera, stopCamera, captureFrame, startRecording, stopRecording, getStream: () => stream };
 }

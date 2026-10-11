@@ -32,6 +32,8 @@ export function useFaceMesh() {
     const eyeOpen = ref(true);
     const blinkCount = ref(0);
     const faceDetected = ref(false);
+    // Normalised (0..1) bounding box of the detected face within the video frame.
+    const faceBox = ref(null);
     const ready = ref(false);
 
     let wasEyeClosed = false;
@@ -58,6 +60,15 @@ export function useFaceMesh() {
             if (result.faceLandmarks && result.faceLandmarks.length > 0) {
                 faceDetected.value = true;
                 const lm = result.faceLandmarks[0];
+
+                let minX = 1, minY = 1, maxX = 0, maxY = 0;
+                for (const pt of lm) {
+                    if (pt.x < minX) minX = pt.x;
+                    if (pt.x > maxX) maxX = pt.x;
+                    if (pt.y < minY) minY = pt.y;
+                    if (pt.y > maxY) maxY = pt.y;
+                }
+                faceBox.value = { top: minY, bottom: maxY, left: minX, right: maxX };
 
                 const noseTip = lm[1];
                 const leftEar = lm[234];
@@ -87,12 +98,14 @@ export function useFaceMesh() {
                 }
             } else {
                 faceDetected.value = false;
+                faceBox.value = null;
                 yaw.value = 0;
                 pitch.value = 0;
                 eyeOpen.value = true;
             }
         } catch {
             faceDetected.value = false;
+            faceBox.value = null;
         }
 
         if (running) {
@@ -133,5 +146,5 @@ export function useFaceMesh() {
         blinkCount.value = 0;
     }
 
-    return { yaw, pitch, eyeOpen, blinkCount, faceDetected, ready, init, startTracking, stopTracking, resetBlinks, destroy };
+    return { yaw, pitch, eyeOpen, blinkCount, faceDetected, faceBox, ready, init, startTracking, stopTracking, resetBlinks, destroy };
 }
