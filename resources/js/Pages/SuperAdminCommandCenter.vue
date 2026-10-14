@@ -9,7 +9,7 @@ import axios from 'axios';
 
 const props = defineProps(['auth']);
 
-const { totalUnread, fetchUnreadCount, handleIncomingMessage, handleTypingEvent, handleReadEvent, handlePresenceEvent, togglePanel, startHeartbeat } = useMessaging();
+const { totalUnread, fetchUnreadCount, handleIncomingMessage, handleTypingEvent, handleReadEvent, handlePresenceEvent, handleChatEvent, togglePanel, startHeartbeat } = useMessaging();
 useTabBadge(totalUnread, 'Super Admin - PitchFlow');
 
 const ready = ref(false);
@@ -79,7 +79,8 @@ onMounted(async () => {
             .listen('.message.sent', handleIncomingMessage)
             .listen('.user.typing', handleTypingEvent)
             .listen('.messages.read', handleReadEvent)
-            .listen('.user.presence', handlePresenceEvent);
+            .listen('.user.presence', handlePresenceEvent)
+            .listen('.chat.event', handleChatEvent);
     }
 });
 

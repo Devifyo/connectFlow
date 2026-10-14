@@ -17,7 +17,7 @@ import '@vuepic/vue-datepicker/dist/main.css';
 
 const props = defineProps(['auth', 'face_recognition']);
 
-const { totalUnread, fetchUnreadCount, handleIncomingMessage, handleTypingEvent, handleReadEvent, handlePresenceEvent, togglePanel, startHeartbeat, openConversationByHash, startConversation, openPanel, setActiveConversation, fetchConversations, conversations } = useMessaging();
+const { totalUnread, fetchUnreadCount, handleIncomingMessage, handleTypingEvent, handleReadEvent, handlePresenceEvent, handleChatEvent, togglePanel, startHeartbeat, openConversationByHash, joinGroupByToken, startConversation, openPanel, setActiveConversation, fetchConversations, conversations } = useMessaging();
 const { handleGlobalMessageEvent, init: initGlobalMessages, pendingMessages, myAnnouncements: myReceivedAnnouncements, myAnnouncementsLoading: myReceivedLoading, fetchMyAnnouncements: fetchMyReceived, toggleReaction: toggleReactionReceived, fetchReactions: fetchReactionsReceived, fetchComments: fetchCommentsReceived, addComment: addCommentReceived } = useGlobalMessages();
 useTabBadge(totalUnread, 'Admin Dashboard - PitchFlow');
 
@@ -972,6 +972,16 @@ async function togglePositionActive(pos) {
     } catch (e) {}
 }
 
+async function togglePositionGroupChats(pos) {
+    const next = !pos.can_create_groups;
+    pos.can_create_groups = next;
+    try {
+        await axios.put(`/api/admin/positions/${pos.id}`, { can_create_groups: next });
+    } catch (e) {
+        pos.can_create_groups = !next;
+    }
+}
+
 async function deletePosition(pos) {
     deleteLoading.value = true;
     try {
@@ -1193,6 +1203,7 @@ onMounted(async () => {
             .listen('.user.typing', handleTypingEvent)
             .listen('.messages.read', handleReadEvent)
             .listen('.user.presence', handlePresenceEvent)
+            .listen('.chat.event', handleChatEvent)
             .listen('.global.message', handleGlobalMessageEvent);
     }
 
@@ -1200,6 +1211,16 @@ onMounted(async () => {
     const convHash = params.get('conversation');
     if (convHash) {
         openConversationByHash(convHash);
+    }
+
+    const joinToken = params.get('join');
+    if (joinToken) {
+        params.delete('join');
+        const qs = params.toString();
+        window.history.replaceState({}, '', window.location.pathname + (qs ? `?${qs}` : ''));
+        joinGroupByToken(joinToken).catch((e) => {
+            alert(e.response?.data?.error || 'Could not join the group.');
+        });
     }
 });
 
@@ -2502,6 +2523,15 @@ onUnmounted(() => {
                                 <p v-if="pos.description" class="text-xs text-surface-400 mt-0.5 truncate">{{ pos.description }}</p>
                                 <p class="text-[10px] text-surface-500 mt-1">{{ pos.users_count }} member{{ pos.users_count !== 1 ? 's' : '' }} assigned</p>
                             </div>
+                            <button @click.stop="togglePositionGroupChats(pos)" draggable="false"
+                                :title="pos.can_create_groups ? 'Members with this position can create group chats' : 'Allow members with this position to create group chats'"
+                                class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg border text-[11px] font-medium transition-colors flex-shrink-0 cursor-pointer"
+                                :class="pos.can_create_groups ? 'border-brand/40 bg-brand/10 text-brand' : 'border-surface-700/50 text-surface-400 hover:text-surface-200'">
+                                <span class="relative w-7 h-4 rounded-full transition-colors" :class="pos.can_create_groups ? 'bg-brand' : 'bg-surface-700'">
+                                    <span class="absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all" :class="pos.can_create_groups ? 'left-[14px]' : 'left-0.5'"></span>
+                                </span>
+                                <span class="hidden sm:inline">Group chats</span>
+                            </button>
                             <div class="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
                                 <button @click="togglePositionActive(pos)"
                                     :title="pos.is_active ? 'Deactivate' : 'Activate'"

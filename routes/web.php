@@ -112,6 +112,26 @@ Route::middleware('auth')->group(function () {
     Route::post('/api/messages/conversations/{conversation}/read', [\App\Http\Controllers\MessageController::class, 'markRead']);
     Route::post('/api/messages/conversations/{conversation}/typing', [\App\Http\Controllers\MessageController::class, 'typing']);
     Route::get('/api/messages/attachments/{attachment}', [\App\Http\Controllers\MessageController::class, 'showAttachment']);
+    Route::get('/api/messages/conversations/{conversation}/pinned', [\App\Http\Controllers\MessageController::class, 'pinned']);
+    Route::post('/api/messages/{message}/react', [\App\Http\Controllers\MessageController::class, 'react']);
+    Route::post('/api/messages/{message}/pin', [\App\Http\Controllers\MessageController::class, 'togglePin']);
+    Route::get('/api/messages/{message}/seen', [\App\Http\Controllers\MessageController::class, 'seenBy']);
+
+    // Group chats
+    Route::post('/api/messages/groups', [\App\Http\Controllers\GroupChatController::class, 'store']);
+    Route::get('/api/messages/groups/{conversation}', [\App\Http\Controllers\GroupChatController::class, 'show']);
+    Route::put('/api/messages/groups/{conversation}', [\App\Http\Controllers\GroupChatController::class, 'update']);
+    Route::delete('/api/messages/groups/{conversation}', [\App\Http\Controllers\GroupChatController::class, 'destroy']);
+    Route::post('/api/messages/groups/{conversation}/members', [\App\Http\Controllers\GroupChatController::class, 'addMembers']);
+    Route::put('/api/messages/groups/{conversation}/members/all', [\App\Http\Controllers\GroupChatController::class, 'setSendPermissionForAll']);
+    Route::put('/api/messages/groups/{conversation}/members/{memberId}', [\App\Http\Controllers\GroupChatController::class, 'updateMember'])->whereNumber('memberId');
+    Route::delete('/api/messages/groups/{conversation}/members/{memberId}', [\App\Http\Controllers\GroupChatController::class, 'removeMember'])->whereNumber('memberId');
+    Route::post('/api/messages/groups/{conversation}/leave', [\App\Http\Controllers\GroupChatController::class, 'leave']);
+    Route::post('/api/messages/groups/{conversation}/invite-link', [\App\Http\Controllers\GroupChatController::class, 'createInviteLink']);
+    Route::delete('/api/messages/groups/{conversation}/invite-link', [\App\Http\Controllers\GroupChatController::class, 'disableInviteLink']);
+    Route::post('/api/messages/groups/join/{token}', [\App\Http\Controllers\GroupChatController::class, 'join'])
+        ->where('token', '[0-9a-zA-Z]{32}')
+        ->middleware('throttle:20,1');
     Route::get('/api/messages/resolve/{hash}', function (string $hash) {
         $id = \App\Support\IdHash::decode($hash);
         if (!$id) return response()->json(['error' => 'Invalid link'], 404);

@@ -12,7 +12,10 @@ const loadingMessages = ref(false);
 const otherLastRead = ref(null);
 const typingState = ref(null);
 const unreadFromIndex = ref(-1);
+const groupDetails = ref(null);
+const pinnedMessages = ref([]);
 const onIncomingCallbacks = [];
+const onSeenCallbacks = [];
 
 let typingTimeout = null;
 let sendTypingTimer = null;
@@ -57,10 +60,11 @@ export function useMessaging() {
         }
     }
 
-    async function sendMessage(conversationId, body, files = []) {
+    async function sendMessage(conversationId, body, files = [], mentions = []) {
         const formData = new FormData();
         if (body) formData.append('body', body);
         files.forEach(file => formData.append('attachments[]', file));
+        mentions.forEach(id => formData.append('mentions[]', id));
 
         const { data } = await axios.post(
             `/api/messages/conversations/${conversationId}/send`,
@@ -83,9 +87,16 @@ export function useMessaging() {
         return data;
     }
 
+    async function fetchAllTeammates() {
+        const { data } = await axios.get('/api/messages/search-users', { params: { all: 1 } });
+        return data;
+    }
+
     async function markRead(conversationId) {
-        if (usePage().props.impersonating) return;
-        await axios.post(`/api/messages/conversations/${conversationId}/read`);
+        // While impersonating we don't persist reads, but the badge should still clear on screen.
+        if (!usePage().props.impersonating) {
+            await axios.post(`/api/messages/conversations/${conversationId}/read`);
+        }
         const conv = conversations.value.find(c => c.id === conversationId);
         if (conv) {
             totalUnread.value = Math.max(0, totalUnread.value - conv.unread);
@@ -102,6 +113,7 @@ export function useMessaging() {
         const conv = conversations.value.find(c => c.id === conversationId);
         if (conv) {
             conv.latest_message = {
+                type: msg.type || 'text',
                 body: msg.body || (msg.attachments?.length ? '📎 Attachment' : ''),
                 sender_name: msg.sender?.name || 'You',
                 created_at: msg.created_at,
@@ -169,8 +181,15 @@ export function useMessaging() {
                         id: data.id,
                         conversation_id: data.conversation_id,
                         user_id: data.user_id,
+                        type: data.type || 'text',
                         body: data.body,
+                        mentions: data.mentions || [],
                         attachments: data.attachments || [],
+                        reactions: [],
+                        pinned_at: null,
+                        ...(groupDetails.value?.is_owner && data.type !== 'system'
+                            ? { seen_count: 0, audience_count: Math.max(0, (groupDetails.value.members?.length || 1) - 1) }
+                            : {}),
                         sender: { id: data.user_id, name: data.sender_name },
                         created_at: data.created_at,
                     });
@@ -182,7 +201,8 @@ export function useMessaging() {
                 if (conv) {
                     conv.unread = (conv.unread || 0) + 1;
                     conv.latest_message = {
-                        body: data.body,
+                        type: data.type || 'text',
+                        body: data.body || (data.attachments?.length ? '📎 Attachment' : ''),
                         sender_name: data.sender_name,
                         created_at: data.created_at,
                         is_mine: false,
@@ -196,6 +216,181 @@ export function useMessaging() {
             playNotificationSound();
             onIncomingCallbacks.forEach(cb => { try { cb(data); } catch {} });
         } catch {}
+    }
+
+    // Reactions, pins and group membership/settings changes from other users.
+    function handleChatEvent(data) {
+        try {
+            const isActive = activeConversation.value?.id === data.conversation_id;
+            switch (data.action) {
+                case 'reaction': {
+                    if (!isActive) break;
+                    const msg = messages.value.find(m => m.id === data.message_id);
+                    if (msg) msg.reactions = data.reactions;
+                    const pinned = pinnedMessages.value.find(m => m.id === data.message_id);
+                    if (pinned) pinned.reactions = data.reactions;
+                    break;
+                }
+                case 'message.deleted': {
+                    messages.value = messages.value.filter(m => m.id !== data.message_id);
+                    pinnedMessages.value = pinnedMessages.value.filter(m => m.id !== data.message_id);
+                    fetchConversations().catch(() => {});
+                    break;
+                }
+                case 'seen': {
+                    if (!isActive) break;
+                    const ids = new Set(data.message_ids || []);
+                    messages.value.forEach(m => {
+                        if (ids.has(m.id) && m.audience_count != null) {
+                            m.seen_count = Math.min((m.seen_count || 0) + 1, m.audience_count);
+                        }
+                    });
+                    onSeenCallbacks.forEach(cb => { try { cb(data); } catch {} });
+                    break;
+                }
+                case 'pin': {
+                    if (!isActive) break;
+                    applyPinUpdate(data.message);
+                    break;
+                }
+                case 'group.updated': {
+                    const conv = conversations.value.find(c => c.id === data.conversation_id);
+                    if (conv && data.title) conv.title = data.title;
+                    if (isActive && data.title) {
+                        activeConversation.value = { ...activeConversation.value, title: data.title };
+                        if (groupDetails.value) groupDetails.value.title = data.title;
+                    }
+                    break;
+                }
+                case 'group.members': {
+                    fetchConversations().then(() => {
+                        if (!isActive) return;
+                        const fresh = conversations.value.find(c => c.id === data.conversation_id);
+                        if (fresh) activeConversation.value = { ...activeConversation.value, ...fresh, unread: 0 };
+                    }).catch(() => {});
+                    if (isActive) fetchGroupDetails(data.conversation_id).catch(() => {});
+                    break;
+                }
+                case 'group.removed': {
+                    const conv = conversations.value.find(c => c.id === data.conversation_id);
+                    if (conv) totalUnread.value = Math.max(0, totalUnread.value - (conv.unread || 0));
+                    conversations.value = conversations.value.filter(c => c.id !== data.conversation_id);
+                    if (isActive) setActiveConversation(null);
+                    break;
+                }
+            }
+        } catch {}
+    }
+
+    function applyPinUpdate(updated) {
+        const msg = messages.value.find(m => m.id === updated.id);
+        if (msg) {
+            msg.pinned_at = updated.pinned_at;
+            msg.pinned_by = updated.pinned_by;
+        }
+        pinnedMessages.value = pinnedMessages.value.filter(m => m.id !== updated.id);
+        if (updated.pinned_at) pinnedMessages.value.unshift(updated);
+    }
+
+    async function toggleReaction(message, emoji) {
+        const { data } = await axios.post(`/api/messages/${message.id}/react`, { emoji });
+        const msg = messages.value.find(m => m.id === data.message_id);
+        if (msg) msg.reactions = data.reactions;
+    }
+
+    async function togglePin(message) {
+        const { data } = await axios.post(`/api/messages/${message.id}/pin`);
+        applyPinUpdate(data);
+    }
+
+    async function fetchPinned(conversationId) {
+        const { data } = await axios.get(`/api/messages/conversations/${conversationId}/pinned`);
+        if (activeConversation.value?.id === conversationId) pinnedMessages.value = data;
+    }
+
+    async function fetchGroupDetails(conversationId) {
+        const { data } = await axios.get(`/api/messages/groups/${conversationId}`);
+        if (activeConversation.value?.id === conversationId) groupDetails.value = data;
+        return data;
+    }
+
+    async function createGroup(title, memberIds) {
+        const { data } = await axios.post('/api/messages/groups', { title, member_ids: memberIds });
+        await openConversationById(data.conversation_id);
+        return data.conversation_id;
+    }
+
+    // Group actions return the system lines they posted; broadcasts skip the actor, so add them here.
+    function appendSystemMessages(conversationId, list) {
+        if (!list?.length || activeConversation.value?.id !== conversationId) return;
+        list.forEach(m => {
+            if (!messages.value.some(x => x.id === m.id)) messages.value.push(m);
+        });
+        updateConversationPreview(conversationId, list[list.length - 1]);
+    }
+
+    async function renameGroup(conversationId, title) {
+        const { data } = await axios.put(`/api/messages/groups/${conversationId}`, { title });
+        appendSystemMessages(conversationId, data.system_messages);
+        const conv = conversations.value.find(c => c.id === conversationId);
+        if (conv) conv.title = data.title;
+        if (activeConversation.value?.id === conversationId) {
+            activeConversation.value = { ...activeConversation.value, title: data.title };
+        }
+        await fetchGroupDetails(conversationId);
+    }
+
+    async function addGroupMembers(conversationId, userIds) {
+        const { data } = await axios.post(`/api/messages/groups/${conversationId}/members`, { user_ids: userIds });
+        appendSystemMessages(conversationId, data.system_messages);
+        await Promise.all([fetchGroupDetails(conversationId), fetchConversations()]);
+    }
+
+    async function removeGroupMember(conversationId, userId) {
+        const { data } = await axios.delete(`/api/messages/groups/${conversationId}/members/${userId}`);
+        appendSystemMessages(conversationId, data.system_messages);
+        await Promise.all([fetchGroupDetails(conversationId), fetchConversations()]);
+    }
+
+    async function setMemberCanSend(conversationId, userId, canSend) {
+        await axios.put(`/api/messages/groups/${conversationId}/members/${userId}`, { can_send: canSend });
+        await fetchGroupDetails(conversationId);
+    }
+
+    async function setAllCanSend(conversationId, canSend) {
+        const { data } = await axios.put(`/api/messages/groups/${conversationId}/members/all`, { can_send: canSend });
+        appendSystemMessages(conversationId, data.system_messages);
+        await fetchGroupDetails(conversationId);
+    }
+
+    async function leaveGroup(conversationId) {
+        await axios.post(`/api/messages/groups/${conversationId}/leave`);
+        conversations.value = conversations.value.filter(c => c.id !== conversationId);
+        if (activeConversation.value?.id === conversationId) setActiveConversation(null);
+    }
+
+    async function createInviteLink(conversationId) {
+        const { data } = await axios.post(`/api/messages/groups/${conversationId}/invite-link`);
+        if (groupDetails.value?.id === conversationId) groupDetails.value.invite_url = data.invite_url;
+        return data.invite_url;
+    }
+
+    async function disableInviteLink(conversationId) {
+        await axios.delete(`/api/messages/groups/${conversationId}/invite-link`);
+        if (groupDetails.value?.id === conversationId) groupDetails.value.invite_url = null;
+    }
+
+    // Used by the dashboards when the page is opened with ?join=<token>.
+    async function joinGroupByToken(token) {
+        const { data } = await axios.post(`/api/messages/groups/join/${token}`);
+        await openConversationById(data.conversation_id);
+        return data;
+    }
+
+    async function deleteGroup(conversationId) {
+        await axios.delete(`/api/messages/groups/${conversationId}`);
+        conversations.value = conversations.value.filter(c => c.id !== conversationId);
+        if (activeConversation.value?.id === conversationId) setActiveConversation(null);
     }
 
     let audioCtx = null;
@@ -328,6 +523,11 @@ export function useMessaging() {
         heartbeatStarted = false;
     }
 
+    function onSeen(cb) {
+        onSeenCallbacks.push(cb);
+        return () => { const i = onSeenCallbacks.indexOf(cb); if (i > -1) onSeenCallbacks.splice(i, 1); };
+    }
+
     function onIncoming(cb) {
         onIncomingCallbacks.push(cb);
         return () => { const i = onIncomingCallbacks.indexOf(cb); if (i > -1) onIncomingCallbacks.splice(i, 1); };
@@ -364,8 +564,12 @@ export function useMessaging() {
         messages.value = [];
         unreadFromIndex.value = conv?.unread > 0 ? conv.unread : -1;
         otherLastRead.value = conv?.other_last_read || null;
+        groupDetails.value = null;
+        pinnedMessages.value = [];
         if (conv?.id) {
             fetchMessages(conv.id);
+            fetchPinned(conv.id).catch(() => {});
+            if (conv.is_group) fetchGroupDetails(conv.id).catch(() => {});
             markRead(conv.id).catch(() => {});
         }
     }
@@ -373,10 +577,14 @@ export function useMessaging() {
     return {
         conversations, activeConversation, messages, totalUnread, isPanelOpen,
         loadingMessages, nextCursor, typingState, otherLastRead, unreadFromIndex,
+        groupDetails, pinnedMessages,
         fetchConversations, fetchMessages, sendMessage, startConversation,
-        searchUsers, markRead, fetchUnreadCount, handleIncomingMessage,
-        handleTypingEvent, handleReadEvent, handlePresenceEvent, emitTyping,
+        searchUsers, fetchAllTeammates, markRead, fetchUnreadCount, handleIncomingMessage,
+        handleTypingEvent, handleReadEvent, handlePresenceEvent, handleChatEvent, emitTyping,
+        toggleReaction, togglePin, fetchPinned, fetchGroupDetails, createGroup, renameGroup,
+        addGroupMembers, removeGroupMember, setMemberCanSend, setAllCanSend, leaveGroup, deleteGroup,
+        createInviteLink, disableInviteLink, joinGroupByToken,
         startHeartbeat, stopHeartbeat,
-        openPanel, closePanel, togglePanel, setActiveConversation, openConversationById, openConversationByHash, onIncoming,
+        openPanel, closePanel, togglePanel, setActiveConversation, openConversationById, openConversationByHash, onIncoming, onSeen,
     };
 }

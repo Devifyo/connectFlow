@@ -59,10 +59,11 @@ class SendAnnouncementEmail implements ShouldQueue
                 'year' => date('Y'),
             ]);
 
-            if (!$rendered) continue;
+            $to = $recipient->getNotificationEmailAddress();
+            if (!$rendered || !$to) continue;
 
-            Mail::html($rendered['body'], function ($mail) use ($recipient, $rendered) {
-                $mail->to($recipient->getNotificationEmailAddress())->subject($rendered['subject']);
+            Mail::html($rendered['body'], function ($mail) use ($to, $rendered) {
+                $mail->to($to)->subject($rendered['subject']);
             });
         }
     }

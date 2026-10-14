@@ -115,4 +115,19 @@ return [
         'name' => env('MAIL_FROM_NAME', env('APP_NAME', 'Laravel')),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Suppressed Recipient Domains
+    |--------------------------------------------------------------------------
+    |
+    | Notification emails are never sent to these domains (seed/demo accounts
+    | or domains with no working mailbox), otherwise every send bounces back
+    | to the "from" inbox.
+    |
+    */
+
+    'suppressed_domains' => array_filter(array_map('trim', explode(',', strtolower(
+        env('MAIL_SUPPRESSED_DOMAINS', 'devifyo.cloud,alphaagency.com,connectflow.com')
+    )))),
+
 ];

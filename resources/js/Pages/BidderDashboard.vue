@@ -22,7 +22,7 @@ import { useStreamingRecorder, resumeStreamQueue } from '@/composables/useStream
 
 const props = defineProps(['auth', 'impersonating', 'face_recognition']);
 
-const { totalUnread, fetchUnreadCount, handleIncomingMessage, handleTypingEvent, handleReadEvent, handlePresenceEvent, togglePanel, startHeartbeat, openConversationByHash, startConversation, openPanel, setActiveConversation, fetchConversations, conversations } = useMessaging();
+const { totalUnread, fetchUnreadCount, handleIncomingMessage, handleTypingEvent, handleReadEvent, handlePresenceEvent, handleChatEvent, togglePanel, startHeartbeat, openConversationByHash, joinGroupByToken, startConversation, openPanel, setActiveConversation, fetchConversations, conversations } = useMessaging();
 const { handleGlobalMessageEvent, init: initGlobalMessages, myAnnouncements, myAnnouncementsLoading, fetchMyAnnouncements, toggleReaction, fetchReactions, fetchComments, addComment } = useGlobalMessages();
 useTabBadge(totalUnread, 'Dashboard - PitchFlow');
 
@@ -1271,6 +1271,7 @@ onMounted(() => {
             .listen('.user.typing', handleTypingEvent)
             .listen('.messages.read', handleReadEvent)
             .listen('.user.presence', handlePresenceEvent)
+            .listen('.chat.event', handleChatEvent)
             .listen('.global.message', handleGlobalMessageEvent);
     }
 
@@ -1278,6 +1279,16 @@ onMounted(() => {
     const convHash = params.get('conversation');
     if (convHash) {
         openConversationByHash(convHash);
+    }
+
+    const joinToken = params.get('join');
+    if (joinToken) {
+        params.delete('join');
+        const qs = params.toString();
+        window.history.replaceState({}, '', window.location.pathname + (qs ? `?${qs}` : ''));
+        joinGroupByToken(joinToken).catch((e) => {
+            alert(e.response?.data?.error || 'Could not join the group.');
+        });
     }
 });
 

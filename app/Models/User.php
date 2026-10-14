@@ -35,6 +35,7 @@ class User extends Authenticatable
             'is_active' => 'boolean',
             'date_of_birth' => 'date',
             'face_enrolled_at' => 'datetime',
+            'face_exempt' => 'boolean',
         ];
     }
 
@@ -90,8 +91,20 @@ class User extends Authenticatable
     public function conversations()
     {
         return $this->belongsToMany(Conversation::class, 'conversation_participants')
-            ->withPivot('last_read_at')
+            ->withPivot('last_read_at', 'role', 'can_send')
             ->withTimestamps();
+    }
+
+    /**
+     * Tenant admins can always create group chats; others need a position
+     * the admin has flagged with "can create groups" (CEO / CTO by default).
+     */
+    public function canCreateGroups(): bool
+    {
+        if (!$this->tenant_id) return false;
+        if ($this->hasRole('TenantAdmin')) return true;
+
+        return $this->positions()->where('is_active', true)->where('can_create_groups', true)->exists();
     }
 
     public function globalMessages()
@@ -101,9 +114,20 @@ class User extends Authenticatable
             ->withTimestamps();
     }
 
-    public function getNotificationEmailAddress(): string
+    /**
+     * Address for notification emails, or null when it's on a suppressed
+     * (undeliverable) domain — sending there just bounces back to us.
+     */
+    public function getNotificationEmailAddress(): ?string
     {
-        return $this->notification_email ?: $this->email;
+        $address = $this->notification_email ?: $this->email;
+        $domain = strtolower(substr(strrchr((string) $address, '@') ?: '', 1));
+
+        if ($domain === '' || in_array($domain, config('mail.suppressed_domains', []), true)) {
+            return null;
+        }
+
+        return $address;
     }
 
     public function sendPasswordResetNotification($token): void

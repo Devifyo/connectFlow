@@ -4,6 +4,8 @@ import { useMessaging } from '@/composables/useMessaging';
 import { usePage } from '@inertiajs/vue3';
 import { vProtectedSrc } from '@/directives/protectedSrc';
 import { vLazySrc } from '@/directives/lazySrc';
+import GroupInfoPanel from './GroupInfoPanel.vue';
+import axios from 'axios';
 
 const emit = defineEmits(['back']);
 
@@ -11,7 +13,10 @@ const {
     activeConversation, messages, sendMessage, startConversation, loadingMessages,
     nextCursor, fetchMessages, fetchConversations, typingState, otherLastRead, emitTyping,
     unreadFromIndex, totalUnread, onIncoming,
+    groupDetails, pinnedMessages, toggleReaction, togglePin, onSeen,
 } = useMessaging();
+
+const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏', '🔥', '🎉'];
 
 const page = usePage();
 const currentUserId = computed(() => page.props.auth.user?.id);
@@ -28,6 +33,156 @@ const filePreviews = ref([]);
 const isDragging = ref(false);
 const lightboxUrl = ref(null);
 const hasNewBelow = ref(false);
+const textareaRef = ref(null);
+const showInfo = ref(false);
+const showPinnedList = ref(false);
+const reactionPickerFor = ref(null);
+const highlightedId = ref(null);
+const actionError = ref('');
+
+const isGroup = computed(() => !!activeConversation.value?.is_group);
+const myMembership = computed(() => groupDetails.value?.members?.find(m => m.id === currentUserId.value));
+const canSendHere = computed(() => {
+    if (!isGroup.value) return true;
+    if (myMembership.value) return myMembership.value.role === 'owner' || myMembership.value.can_send;
+    return activeConversation.value?.can_send !== false;
+});
+const memberNameById = computed(() => {
+    const map = {};
+    (groupDetails.value?.members || []).forEach(m => { map[m.id] = m.name; });
+    return map;
+});
+
+// --- @mentions (groups only) ---
+const mentionQuery = ref(null);
+const mentionStart = ref(-1);
+const mentionIndex = ref(0);
+const pendingMentions = ref([]);
+
+const mentionCandidates = computed(() => {
+    if (mentionQuery.value === null || !isGroup.value) return [];
+    const q = mentionQuery.value.toLowerCase();
+    const members = (groupDetails.value?.members || [])
+        .filter(m => m.id !== currentUserId.value && m.name.toLowerCase().includes(q))
+        .slice(0, 6);
+    const everyone = 'everyone'.startsWith(q) ? [{ id: 'everyone', name: 'everyone', isEveryone: true }] : [];
+    return [...everyone, ...members];
+});
+
+function updateMentionState() {
+    const el = textareaRef.value;
+    if (!el || !isGroup.value) { mentionQuery.value = null; return; }
+    const upto = body.value.slice(0, el.selectionStart);
+    const match = upto.match(/(^|\s)@([^\s@]*)$/);
+    if (match) {
+        mentionQuery.value = match[2];
+        mentionStart.value = upto.length - match[2].length - 1;
+        mentionIndex.value = 0;
+    } else {
+        mentionQuery.value = null;
+    }
+}
+
+function pickMention(member) {
+    const el = textareaRef.value;
+    const before = body.value.slice(0, mentionStart.value);
+    const after = body.value.slice(el ? el.selectionStart : body.value.length);
+    const insert = '@' + member.name + ' ';
+    body.value = before + insert + after;
+    if (!member.isEveryone && !pendingMentions.value.some(m => m.id === member.id)) {
+        pendingMentions.value.push({ id: member.id, name: member.name });
+    }
+    mentionQuery.value = null;
+    nextTick(() => {
+        const pos = before.length + insert.length;
+        el?.focus();
+        el?.setSelectionRange(pos, pos);
+    });
+}
+
+// --- reactions / pins ---
+async function react(msg, emoji) {
+    reactionPickerFor.value = null;
+    try { await toggleReaction(msg, emoji); } catch {}
+}
+
+function hasReacted(reaction) {
+    return reaction.users?.some(u => u.id === currentUserId.value);
+}
+
+function reactionTitle(reaction) {
+    return (reaction.users || []).map(u => u.id === currentUserId.value ? 'You' : u.name).join(', ');
+}
+
+async function pin(msg) {
+    actionError.value = '';
+    try {
+        await togglePin(msg);
+    } catch (e) {
+        actionError.value = e.response?.data?.error || 'Could not update pin.';
+        setTimeout(() => { actionError.value = ''; }, 3000);
+    }
+}
+
+// --- "Seen by" (group owner only) ---
+const isGroupOwner = computed(() => isGroup.value && !!groupDetails.value?.is_owner);
+const seenInfo = ref(null); // { message, loading, seen, not_seen }
+
+async function openSeenBy(msg) {
+    seenInfo.value = { message: msg, loading: true, seen: [], not_seen: [] };
+    try {
+        const { data } = await axios.get(`/api/messages/${msg.id}/seen`);
+        if (seenInfo.value?.message.id === msg.id) seenInfo.value = { message: msg, loading: false, ...data };
+    } catch (e) {
+        seenInfo.value = null;
+        actionError.value = e.response?.data?.error || 'Could not load who has seen this.';
+        setTimeout(() => { actionError.value = ''; }, 3000);
+    }
+}
+
+// --- Who reacted with what ---
+const reactionsView = ref(null); // { messageId, tab }
+
+const reactionsViewMessage = computed(() => {
+    if (!reactionsView.value) return null;
+    return messages.value.find(m => m.id === reactionsView.value.messageId) || null;
+});
+
+const reactionsViewRows = computed(() => {
+    const msg = reactionsViewMessage.value;
+    if (!msg) return [];
+    const tab = reactionsView.value.tab;
+    return (msg.reactions || [])
+        .filter(r => tab === 'all' || r.emoji === tab)
+        .flatMap(r => (r.users || []).map(u => ({ ...u, emoji: r.emoji })))
+        .sort((a, b) => (a.id === currentUserId.value ? -1 : b.id === currentUserId.value ? 1 : a.name.localeCompare(b.name)));
+});
+
+function totalReactions(msg) {
+    return (msg.reactions || []).reduce((n, r) => n + r.count, 0);
+}
+
+function openReactions(msg, tab = 'all') {
+    reactionsView.value = { messageId: msg.id, tab };
+}
+
+function jumpToMessage(id) {
+    showPinnedList.value = false;
+    const el = document.getElementById('msg-' + id);
+    if (!el) return;
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    highlightedId.value = id;
+    setTimeout(() => { if (highlightedId.value === id) highlightedId.value = null; }, 1800);
+}
+
+function preview(msg) {
+    if (msg.body) return msg.body.length > 90 ? msg.body.slice(0, 90) + '…' : msg.body;
+    return msg.attachments?.length ? '📎 Attachment' : '';
+}
+
+function mentionsMe(msg) {
+    return isGroup.value && msg.user_id !== currentUserId.value && (msg.mentions || []).includes(currentUserId.value);
+}
 
 const originalTitle = typeof document !== 'undefined' ? document.title : '';
 let titleFlashInterval = null;
@@ -50,9 +205,18 @@ function stopTitleFlash() {
 }
 
 let removeIncomingHook = null;
+let removeSeenHook = null;
+
+function closeReactionPicker() { reactionPickerFor.value = null; }
 
 onMounted(() => {
     document.addEventListener('visibilitychange', handleVisibility);
+    document.addEventListener('click', closeReactionPicker);
+    // Refresh an open "Message info" when someone reads it.
+    removeSeenHook = onSeen((data) => {
+        const msg = seenInfo.value?.message;
+        if (msg && !seenInfo.value.loading && (data.message_ids || []).includes(msg.id)) openSeenBy(msg);
+    });
     removeIncomingHook = onIncoming(() => {
         startTitleFlash(totalUnread.value || 1);
     });
@@ -61,7 +225,9 @@ onMounted(() => {
 onUnmounted(() => {
     stopTitleFlash();
     document.removeEventListener('visibilitychange', handleVisibility);
+    document.removeEventListener('click', closeReactionPicker);
     if (removeIncomingHook) removeIncomingHook();
+    if (removeSeenHook) removeSeenHook();
 });
 
 function handleVisibility() {
@@ -112,7 +278,14 @@ watch(typingState, (val) => {
     if (val && isNearBottom()) nextTick(() => scrollToBottom());
 });
 
-watch(activeConversation, () => {
+watch(() => activeConversation.value?.id, () => {
+    showInfo.value = false;
+    seenInfo.value = null;
+    reactionsView.value = null;
+    showPinnedList.value = false;
+    reactionPickerFor.value = null;
+    pendingMentions.value = [];
+    mentionQuery.value = null;
     body.value = '';
     selectedFiles.value = [];
     filePreviews.value = [];
@@ -179,17 +352,29 @@ async function handleSend() {
             activeConversation.value = { ...activeConversation.value, id: convId, isDraft: false };
             await fetchConversations();
         }
-        await sendMessage(convId, body.value.trim(), selectedFiles.value);
+        const text = body.value.trim();
+        const mentionIds = pendingMentions.value.filter(m => text.includes('@' + m.name)).map(m => m.id);
+        await sendMessage(convId, text, selectedFiles.value, mentionIds);
+        pendingMentions.value = [];
         body.value = '';
         selectedFiles.value = [];
         filePreviews.value = [];
         nextTick(() => scrollToBottom());
+    } catch (e) {
+        actionError.value = e.response?.data?.error || 'Message could not be sent.';
+        setTimeout(() => { actionError.value = ''; }, 4000);
     } finally {
         sending.value = false;
     }
 }
 
 function handleKeydown(e) {
+    if (mentionCandidates.value.length) {
+        if (e.key === 'ArrowDown') { e.preventDefault(); mentionIndex.value = (mentionIndex.value + 1) % mentionCandidates.value.length; return; }
+        if (e.key === 'ArrowUp') { e.preventDefault(); mentionIndex.value = (mentionIndex.value - 1 + mentionCandidates.value.length) % mentionCandidates.value.length; return; }
+        if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pickMention(mentionCandidates.value[mentionIndex.value]); return; }
+        if (e.key === 'Escape') { e.preventDefault(); mentionQuery.value = null; return; }
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         handleSend();
@@ -204,6 +389,7 @@ function jumpToBottom() {
 
 function handleInput() {
     dismissUnread();
+    updateMentionState();
     if (activeConversation.value?.id) {
         emitTyping(activeConversation.value.id);
     }
@@ -305,11 +491,13 @@ function shouldShowDate(index) {
 
 function isSameSender(index) {
     if (index === 0) return false;
+    if (messages.value[index].type === 'system' || messages.value[index - 1].type === 'system') return false;
     return messages.value[index].user_id === messages.value[index - 1].user_id && !shouldShowDate(index);
 }
 
 function isLastInGroup(index) {
     if (index === messages.value.length - 1) return true;
+    if (messages.value[index + 1]?.type === 'system') return true;
     return messages.value[index].user_id !== messages.value[index + 1]?.user_id || shouldShowDate(index + 1);
 }
 
@@ -325,6 +513,31 @@ function linkify(text) {
         /https?:\/\/[^\s<]+/g,
         url => `<a href="${url}" target="_blank" rel="noopener noreferrer" class="underline break-all">${url}</a>`
     );
+}
+
+function escapeHtml(text) {
+    return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function renderBody(msg) {
+    let html = linkify(msg.body);
+    const ids = msg.mentions || [];
+    if (!ids.length) return html;
+    const mine = msg.user_id === currentUserId.value;
+    if (isGroup.value && /(^|\s)@everyone\b/i.test(msg.body)) {
+        const cls = mine ? 'mention mention-on-brand' : 'mention mention-me';
+        html = html.replace(/(^|\s)(@everyone)\b/gi, `$1<span class="${cls}">$2</span>`);
+    }
+    for (const id of ids) {
+        const name = memberNameById.value[id];
+        if (!name) continue;
+        const token = '@' + escapeHtml(name);
+        const cls = id === currentUserId.value
+            ? 'mention mention-me'
+            : (mine ? 'mention mention-on-brand' : 'mention');
+        html = html.split(token).join(`<span class="${cls}">${token}</span>`);
+    }
+    return html;
 }
 
 function lastSeenText(dateStr) {
@@ -383,12 +596,30 @@ function hasMedia(msg) {
     <!-- Active chat -->
     <template v-else>
         <!-- Header -->
-        <div class="h-16 px-5 flex items-center gap-3.5 border-b border-surface-800/50 flex-shrink-0">
+        <div class="h-16 px-5 sm:pr-12 flex items-center gap-3.5 border-b border-surface-800/50 flex-shrink-0">
             <button @click="emit('back')" class="sm:hidden text-surface-400 hover:text-surface-100 transition-colors -ml-1">
                 <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5"/>
                 </svg>
             </button>
+            <!-- Group header -->
+            <template v-if="isGroup">
+                <div class="w-10 h-10 rounded-xl bg-indigo-500/15 text-indigo-300 flex items-center justify-center flex-shrink-0">
+                    <span class="text-xs font-bold">{{ initials(activeConversation.title) }}</span>
+                </div>
+                <button @click="showInfo = true" class="min-w-0 flex-1 text-left">
+                    <div class="text-sm font-semibold text-surface-100 truncate">{{ activeConversation.title }}</div>
+                    <div class="text-xs mt-0.5 truncate">
+                        <span v-if="typingState" class="text-brand font-medium">{{ typingState.split(' ')[0] }} is typing<span class="typing-dots">...</span></span>
+                        <span v-else class="text-surface-500">{{ groupDetails?.members?.length || activeConversation.member_count }} members</span>
+                    </div>
+                </button>
+                <button @click="showInfo = true" title="Group info"
+                    class="w-8 h-8 rounded-lg flex items-center justify-center text-surface-400 hover:text-surface-100 hover:bg-surface-800 transition-colors flex-shrink-0">
+                    <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z"/></svg>
+                </button>
+            </template>
+            <template v-else>
             <div class="relative">
                 <div class="w-10 h-10 rounded-full bg-surface-700 flex items-center justify-center overflow-hidden">
                     <img v-if="activeConversation.user?.profile_picture_url" v-protected-src="activeConversation.user.profile_picture_url" class="w-full h-full object-cover" draggable="false" @contextmenu.prevent />
@@ -421,6 +652,29 @@ function hasMedia(msg) {
                     </template>
                 </div>
                 <div v-else class="text-xs mt-0.5 text-surface-500">New conversation</div>
+            </div>
+            </template>
+        </div>
+
+        <!-- Pinned messages bar -->
+        <div v-if="pinnedMessages.length" class="relative flex-shrink-0 border-b border-surface-800/50 bg-surface-900/80">
+            <button @click="showPinnedList = !showPinnedList" class="w-full px-5 py-2 flex items-center gap-2.5 text-left hover:bg-surface-800/30 transition-colors">
+                <span class="text-sm">📌</span>
+                <div class="min-w-0 flex-1">
+                    <div class="text-[10px] font-semibold text-brand">Pinned{{ pinnedMessages.length > 1 ? ` · ${pinnedMessages.length}` : '' }}</div>
+                    <div class="text-xs text-surface-300 truncate">{{ preview(pinnedMessages[0]) }}</div>
+                </div>
+                <svg class="w-4 h-4 text-surface-500 transition-transform" :class="showPinnedList ? 'rotate-180' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
+            </button>
+            <div v-if="showPinnedList" class="absolute left-0 right-0 top-full z-20 max-h-72 overflow-y-auto scrollbar-thin bg-surface-900 border-b border-surface-800/60 shadow-2xl">
+                <div v-for="pm in pinnedMessages" :key="pm.id" class="px-5 py-2.5 flex items-start gap-3 border-t border-surface-800/40 hover:bg-surface-800/30">
+                    <button @click="jumpToMessage(pm.id)" class="min-w-0 flex-1 text-left">
+                        <div class="text-[11px] font-medium text-surface-300">{{ pm.sender?.name }} <span class="text-surface-500 font-normal">· {{ formatFullTime(pm.created_at) }}</span></div>
+                        <div class="text-xs text-surface-200 whitespace-pre-wrap break-words">{{ preview(pm) }}</div>
+                        <div v-if="pm.pinned_by" class="text-[10px] text-surface-500 mt-0.5">Pinned by {{ pm.pinned_by.id === currentUserId ? 'you' : pm.pinned_by.name }}</div>
+                    </button>
+                    <button v-if="canSendHere" @click="pin(pm)" class="text-[11px] text-surface-400 hover:text-red-400 flex-shrink-0">Unpin</button>
+                </div>
             </div>
         </div>
 
@@ -468,11 +722,16 @@ function hasMedia(msg) {
                     <div class="flex-1 h-px bg-brand/40"></div>
                 </div>
 
+                <!-- System line (group events) -->
+                <div v-if="msg.type === 'system'" :id="'msg-' + msg.id" class="flex justify-center my-3">
+                    <span class="text-[11px] text-surface-400 bg-surface-800/50 px-3 py-1 rounded-full text-center">{{ msg.body }}</span>
+                </div>
+
                 <!-- Message row -->
-                <div
+                <div v-else
                     :id="'msg-' + msg.id"
-                    class="flex items-end gap-2.5"
-                    :class="[msg.user_id === currentUserId ? 'justify-end' : 'justify-start', isSameSender(i) ? 'mt-1' : 'mt-4']"
+                    class="flex items-end gap-2.5 rounded-xl transition-colors duration-700"
+                    :class="[msg.user_id === currentUserId ? 'justify-end' : 'justify-start', isSameSender(i) ? 'mt-1' : 'mt-4', highlightedId === msg.id ? 'bg-brand/10' : '']"
                 >
                     <!-- Other user avatar -->
                     <div v-if="msg.user_id !== currentUserId" class="w-7 flex-shrink-0 mb-0.5">
@@ -490,10 +749,36 @@ function hasMedia(msg) {
                         </p>
 
                         <div class="relative group" :class="msg.user_id === currentUserId ? 'ml-auto' : ''">
+                            <div v-if="msg.pinned_at" class="text-[10px] text-brand/80 mb-0.5 flex items-center gap-1" :class="msg.user_id === currentUserId ? 'justify-end mr-1' : 'ml-1'">
+                                📌 Pinned
+                            </div>
+
+                            <!-- Hover actions: react + pin -->
+                            <div class="absolute top-1 z-10 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                                :class="[msg.user_id === currentUserId ? 'right-full mr-1.5' : 'left-full ml-1.5', reactionPickerFor === msg.id ? '!opacity-100' : '']">
+                                <button @click.stop="reactionPickerFor = reactionPickerFor === msg.id ? null : msg.id" title="React"
+                                    class="w-7 h-7 rounded-full bg-surface-800 hover:bg-surface-700 flex items-center justify-center text-surface-300 shadow">
+                                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.6"><path stroke-linecap="round" stroke-linejoin="round" d="M15.182 15.182a4.5 4.5 0 01-6.364 0M21 12a9 9 0 11-18 0 9 9 0 0118 0zM9.75 9.75c0 .414-.168.75-.375.75S9 10.164 9 9.75 9.168 9 9.375 9s.375.336.375.75zm-.375 0h.008v.015h-.008V9.75zm5.625 0c0 .414-.168.75-.375.75s-.375-.336-.375-.75.168-.75.375-.75.375.336.375.75zm-.375 0h.008v.015h-.008V9.75z"/></svg>
+                                </button>
+                                <button v-if="isGroupOwner" @click.stop="openSeenBy(msg)" title="Seen by"
+                                    class="w-7 h-7 rounded-full bg-surface-800 hover:bg-surface-700 flex items-center justify-center text-surface-300 shadow">
+                                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.6"><path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                                </button>
+                                <button v-if="canSendHere" @click.stop="pin(msg)" :title="msg.pinned_at ? 'Unpin' : 'Pin'"
+                                    class="w-7 h-7 rounded-full bg-surface-800 hover:bg-surface-700 flex items-center justify-center text-[13px] shadow"
+                                    :class="msg.pinned_at ? 'ring-1 ring-brand/60' : 'grayscale opacity-80'">📌</button>
+                                <div v-if="reactionPickerFor === msg.id"
+                                    class="absolute bottom-full mb-1.5 flex gap-0.5 p-1 rounded-full bg-surface-800 border border-surface-700/50 shadow-xl"
+                                    :class="msg.user_id === currentUserId ? 'right-0' : 'left-0'">
+                                    <button v-for="emoji in QUICK_REACTIONS" :key="emoji" @click.stop="react(msg, emoji)"
+                                        class="w-7 h-7 rounded-full hover:bg-surface-700 text-base leading-none transition-transform hover:scale-125">{{ emoji }}</button>
+                                </div>
+                            </div>
 
                             <!-- Single connected card for the whole message -->
                             <div class="rounded-2xl overflow-hidden"
                                 :class="[
+                                    mentionsMe(msg) ? 'ring-2 ring-amber-400/60' : '',
                                     isLastInGroup(i)
                                         ? (msg.user_id === currentUserId ? 'rounded-br-sm' : 'rounded-bl-sm')
                                         : '',
@@ -507,7 +792,7 @@ function hasMedia(msg) {
                                         ? 'bg-brand text-surface-950'
                                         : 'bg-surface-800 text-surface-100'"
                                 >
-                                    <p class="whitespace-pre-wrap break-words" v-html="linkify(msg.body)"></p>
+                                    <p class="whitespace-pre-wrap break-words" v-html="renderBody(msg)"></p>
                                     <!-- Inline time for text-only messages -->
                                     <div v-if="!hasMedia(msg)" class="flex items-center justify-end gap-1.5 mt-1 -mb-0.5">
                                         <span class="text-[10px] leading-none" :class="msg.user_id === currentUserId ? 'text-surface-950/50' : 'text-surface-500'">{{ formatTime(msg.created_at) }}</span>
@@ -582,8 +867,35 @@ function hasMedia(msg) {
                                 </div>
                             </div>
 
+                            <!-- Reactions -->
+                            <div v-if="msg.reactions?.length" class="flex flex-wrap gap-1 mt-1" :class="msg.user_id === currentUserId ? 'justify-end' : ''">
+                                <button v-for="r in msg.reactions" :key="r.emoji" @click="react(msg, r.emoji)" :title="reactionTitle(r)"
+                                    class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs border transition-colors"
+                                    :class="hasReacted(r) ? 'bg-brand/15 border-brand/40 text-brand' : 'bg-surface-800/80 border-surface-700/50 text-surface-300 hover:border-surface-600'">
+                                    <span class="leading-none">{{ r.emoji }}</span>
+                                    <span class="text-[10px] font-semibold">{{ r.count }}</span>
+                                </button>
+                                <button @click="openReactions(msg)" title="See who reacted"
+                                    class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] text-surface-400 hover:text-surface-100 hover:bg-surface-800/80 transition-colors">
+                                    {{ totalReactions(msg) === 1 ? '1 reaction' : `${totalReactions(msg)} reactions` }}
+                                </button>
+                            </div>
+
+                            <!-- Owner: seen counter on every message -->
+                            <button v-if="isGroupOwner && msg.audience_count > 0" @click="openSeenBy(msg)"
+                                class="mt-1 w-fit flex items-center gap-1 text-[10px] transition-colors hover:underline"
+                                :class="[
+                                    msg.user_id === currentUserId ? 'ml-auto mr-1' : 'ml-1',
+                                    msg.seen_count >= msg.audience_count ? 'text-sky-400' : 'text-surface-500 hover:text-surface-300',
+                                ]">
+                                <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                                <span v-if="msg.seen_count >= msg.audience_count">Seen by all</span>
+                                <span v-else-if="!msg.seen_count">Not seen yet · 0/{{ msg.audience_count }}</span>
+                                <span v-else>Seen by {{ msg.seen_count }}/{{ msg.audience_count }}</span>
+                            </button>
+
                             <!-- Hover tooltip -->
-                            <div v-if="msg.user_id === currentUserId && messageStatus(msg)"
+                            <div v-if="!isGroup && msg.user_id === currentUserId && messageStatus(msg)"
                                 class="opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity duration-200
                                        absolute -top-8 right-0 px-2.5 py-1 rounded-lg bg-surface-700 text-[10px] text-surface-300 whitespace-nowrap shadow-lg z-10">
                                 {{ seenTooltip(msg) }}
@@ -596,7 +908,7 @@ function hasMedia(msg) {
             <!-- Typing indicator -->
             <div v-if="typingState" class="flex items-end gap-2.5 mt-4">
                 <div class="w-7 h-7 rounded-full bg-surface-700 flex items-center justify-center flex-shrink-0 overflow-hidden">
-                    <img v-if="activeConversation.user?.profile_picture_url" v-protected-src="activeConversation.user.profile_picture_url" class="w-full h-full object-cover" draggable="false" @contextmenu.prevent />
+                    <img v-if="!isGroup && activeConversation.user?.profile_picture_url" v-protected-src="activeConversation.user.profile_picture_url" class="w-full h-full object-cover" draggable="false" @contextmenu.prevent />
                     <span v-else class="text-[9px] font-bold text-surface-400">{{ initials(typingState) }}</span>
                 </div>
                 <div class="bg-surface-800 rounded-2xl rounded-bl-sm px-4 py-3">
@@ -672,7 +984,26 @@ function hasMedia(msg) {
         </div>
 
         <!-- Input area -->
-        <div class="px-4 py-3 border-t border-surface-800/50 flex-shrink-0">
+        <div v-if="actionError" class="px-4 pt-2 text-[11px] text-red-400 flex-shrink-0">{{ actionError }}</div>
+        <div v-if="!canSendHere" class="px-4 py-3.5 border-t border-surface-800/50 flex-shrink-0 text-center text-xs text-surface-500">
+            🔒 Only members allowed by the group owner can send messages here.
+        </div>
+        <div v-else class="px-4 py-3 border-t border-surface-800/50 flex-shrink-0 relative">
+            <!-- Mention suggestions -->
+            <div v-if="mentionCandidates.length" class="absolute left-14 right-16 bottom-full mb-1 z-20 bg-surface-800 border border-surface-700/50 rounded-xl shadow-xl overflow-hidden">
+                <button v-for="(m, idx) in mentionCandidates" :key="m.id" @mousedown.prevent="pickMention(m)"
+                    class="w-full px-3 py-2 flex items-center gap-2 text-left text-xs transition-colors"
+                    :class="idx === mentionIndex ? 'bg-surface-700/70 text-surface-100' : 'text-surface-300 hover:bg-surface-700/40'">
+                    <template v-if="m.isEveryone">
+                        <span class="w-6 h-6 rounded-full bg-brand/20 text-brand flex items-center justify-center text-[11px]">👥</span>
+                        <span><span class="font-semibold">@everyone</span> <span class="text-surface-500">· notify all members</span></span>
+                    </template>
+                    <template v-else>
+                        <span class="w-6 h-6 rounded-full bg-surface-700 flex items-center justify-center text-[9px] font-bold text-surface-300">{{ initials(m.name) }}</span>
+                        {{ m.name }}
+                    </template>
+                </button>
+            </div>
             <div class="flex items-end gap-2">
                 <!-- Attach button -->
                 <button @click="fileInputRef?.click()"
@@ -685,10 +1016,13 @@ function hasMedia(msg) {
                     accept="image/*,video/*,.svg,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip" />
 
                 <textarea
+                    ref="textareaRef"
                     v-model="body"
                     @keydown="handleKeydown"
                     @input="handleInput"
-                    placeholder="Type a message..."
+                    @click="updateMentionState"
+                    @blur="mentionQuery = null"
+                    :placeholder="isGroup ? 'Message the group — type @ to mention' : 'Type a message...'"
                     rows="1"
                     class="flex-1 px-4 py-2.5 text-sm bg-surface-800/60 border border-surface-700/30 rounded-2xl text-surface-100 placeholder-surface-500 focus:outline-none focus:border-surface-600 focus:bg-surface-800/80 resize-none max-h-32 scrollbar-thin transition-colors"
                 ></textarea>
@@ -705,6 +1039,93 @@ function hasMedia(msg) {
             </div>
         </div>
     </template>
+
+    <GroupInfoPanel v-if="activeConversation && isGroup && showInfo" @close="showInfo = false" />
+
+    <!-- Who reacted -->
+    <div v-if="reactionsView && reactionsViewMessage" class="absolute inset-0 z-30 flex items-center justify-center p-4">
+        <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" @click="reactionsView = null"></div>
+        <div class="relative w-full max-w-sm max-h-[80%] flex flex-col bg-surface-900 border border-surface-700/50 rounded-2xl shadow-2xl">
+            <div class="px-5 pt-4 pb-3 border-b border-surface-800/50">
+                <div class="flex items-center justify-between">
+                    <h3 class="text-sm font-semibold text-surface-100">Reactions</h3>
+                    <button @click="reactionsView = null" class="text-surface-400 hover:text-surface-100">
+                        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+                    </button>
+                </div>
+                <div class="flex gap-1 mt-3 overflow-x-auto scrollbar-thin">
+                    <button @click="reactionsView.tab = 'all'"
+                        class="px-2.5 py-1 rounded-full text-xs flex-shrink-0 transition-colors"
+                        :class="reactionsView.tab === 'all' ? 'bg-brand/15 text-brand font-semibold' : 'text-surface-400 hover:bg-surface-800'">
+                        All {{ totalReactions(reactionsViewMessage) }}
+                    </button>
+                    <button v-for="r in reactionsViewMessage.reactions" :key="r.emoji" @click="reactionsView.tab = r.emoji"
+                        class="px-2.5 py-1 rounded-full text-xs flex-shrink-0 transition-colors"
+                        :class="reactionsView.tab === r.emoji ? 'bg-brand/15 text-brand font-semibold' : 'text-surface-400 hover:bg-surface-800'">
+                        {{ r.emoji }} {{ r.count }}
+                    </button>
+                </div>
+            </div>
+            <div class="overflow-y-auto scrollbar-thin px-5 py-3">
+                <p v-if="!reactionsViewRows.length" class="text-xs text-surface-500 py-4 text-center">No reactions</p>
+                <div v-for="row in reactionsViewRows" :key="row.id + row.emoji" class="flex items-center gap-2.5 py-1.5">
+                    <div class="w-7 h-7 rounded-full bg-surface-700 flex items-center justify-center flex-shrink-0">
+                        <span class="text-[9px] font-bold text-surface-300">{{ initials(row.name) }}</span>
+                    </div>
+                    <span class="text-xs text-surface-100 flex-1 truncate">
+                        {{ row.id === currentUserId ? 'You' : row.name }}
+                    </span>
+                    <button v-if="row.id === currentUserId" @click="react(reactionsViewMessage, row.emoji)"
+                        class="text-[10px] text-surface-500 hover:text-red-400">Remove</button>
+                    <span class="text-lg leading-none">{{ row.emoji }}</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Seen by (group owner) -->
+    <div v-if="seenInfo" class="absolute inset-0 z-30 flex items-center justify-center p-4">
+        <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" @click="seenInfo = null"></div>
+        <div class="relative w-full max-w-sm max-h-[80%] flex flex-col bg-surface-900 border border-surface-700/50 rounded-2xl shadow-2xl">
+            <div class="px-5 py-4 border-b border-surface-800/50 flex items-start gap-3">
+                <div class="min-w-0 flex-1">
+                    <h3 class="text-sm font-semibold text-surface-100">Message info</h3>
+                    <p class="text-[11px] text-surface-400 mt-1 truncate">{{ seenInfo.message.sender?.name }}: {{ preview(seenInfo.message) }}</p>
+                    <p class="text-[10px] text-surface-500 mt-0.5">Sent {{ formatFullTime(seenInfo.message.created_at) }}</p>
+                </div>
+                <button @click="seenInfo = null" class="text-surface-400 hover:text-surface-100">
+                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+                </button>
+            </div>
+            <div v-if="seenInfo.loading" class="py-10 flex justify-center">
+                <div class="w-5 h-5 border-2 border-surface-600 border-t-surface-300 rounded-full animate-spin"></div>
+            </div>
+            <div v-else class="overflow-y-auto scrollbar-thin p-4 space-y-4">
+                <div>
+                    <p class="text-[10px] uppercase tracking-wide text-emerald-400 mb-1.5">Seen by {{ seenInfo.seen.length }}</p>
+                    <p v-if="!seenInfo.seen.length" class="text-xs text-surface-500">Nobody yet</p>
+                    <div v-for="u in seenInfo.seen" :key="u.id" class="flex items-center gap-2.5 py-1.5">
+                        <div class="w-7 h-7 rounded-full bg-surface-700 flex items-center justify-center overflow-hidden flex-shrink-0">
+                            <img v-if="u.profile_picture_url" v-protected-src="u.profile_picture_url" class="w-full h-full object-cover" draggable="false" @contextmenu.prevent />
+                            <span v-else class="text-[9px] font-bold text-surface-300">{{ initials(u.name) }}</span>
+                        </div>
+                        <span class="text-xs text-surface-100 flex-1 truncate">{{ u.name }}</span>
+                        <span class="text-[10px] text-surface-400 flex-shrink-0">{{ u.seen_at ? formatFullTime(u.seen_at) : 'Seen' }}</span>
+                    </div>
+                </div>
+                <div v-if="seenInfo.not_seen.length">
+                    <p class="text-[10px] uppercase tracking-wide text-surface-500 mb-1.5">Not seen · {{ seenInfo.not_seen.length }}</p>
+                    <div v-for="u in seenInfo.not_seen" :key="u.id" class="flex items-center gap-2.5 py-1.5 opacity-70">
+                        <div class="w-7 h-7 rounded-full bg-surface-700 flex items-center justify-center overflow-hidden flex-shrink-0">
+                            <img v-if="u.profile_picture_url" v-protected-src="u.profile_picture_url" class="w-full h-full object-cover" draggable="false" @contextmenu.prevent />
+                            <span v-else class="text-[9px] font-bold text-surface-300">{{ initials(u.name) }}</span>
+                        </div>
+                        <span class="text-xs text-surface-300 flex-1 truncate">{{ u.name }}</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <!-- Image lightbox -->
     <Teleport to="body">
@@ -747,6 +1168,22 @@ function hasMedia(msg) {
 @keyframes typingBounce {
     0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
     30% { transform: translateY(-6px); opacity: 1; }
+}
+
+:deep(.mention) {
+    font-weight: 600;
+    color: #818cf8;
+}
+:deep(.mention-on-brand) {
+    color: inherit;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+:deep(.mention-me) {
+    color: #fbbf24;
+    background: rgba(251, 191, 36, 0.12);
+    border-radius: 4px;
+    padding: 0 2px;
 }
 
 .status-icon {

@@ -16,7 +16,7 @@ class Conversation extends Model
     public function participants()
     {
         return $this->belongsToMany(User::class, 'conversation_participants')
-            ->withPivot('last_read_at')
+            ->withPivot('last_read_at', 'role', 'can_send')
             ->withTimestamps();
     }
 
@@ -28,5 +28,15 @@ class Conversation extends Model
     public function latestMessage()
     {
         return $this->hasOne(Message::class)->latestOfMany();
+    }
+
+    public function isGroup(): bool
+    {
+        return $this->type === 'group';
+    }
+
+    public function isOwner(User $user): bool
+    {
+        return $this->isGroup() && (int) $this->created_by === (int) $user->id;
     }
 }

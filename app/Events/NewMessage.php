@@ -34,7 +34,9 @@ class NewMessage implements ShouldBroadcastNow
             'conversation_id' => $this->message->conversation_id,
             'user_id' => $this->message->user_id,
             'sender_name' => $this->message->sender?->name ?? 'Unknown',
+            'type' => $this->message->type ?? 'text',
             'body' => $this->message->body,
+            'mentions' => $this->message->mentions ?? [],
             'attachments' => $this->message->attachments->map(fn ($a) => [
                 'id' => $a->id,
                 'original_name' => $a->original_name,

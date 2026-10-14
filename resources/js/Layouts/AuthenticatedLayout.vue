@@ -12,7 +12,7 @@ import { useMessaging } from '@/composables/useMessaging';
 const showingNavigationDropdown = ref(false);
 
 const page = usePage();
-const { totalUnread, fetchUnreadCount, handleIncomingMessage, handleTypingEvent, handleReadEvent, handlePresenceEvent, togglePanel, startHeartbeat } = useMessaging();
+const { totalUnread, fetchUnreadCount, handleIncomingMessage, handleTypingEvent, handleReadEvent, handlePresenceEvent, handleChatEvent, togglePanel, startHeartbeat } = useMessaging();
 
 let echoChannel = null;
 
@@ -26,6 +26,7 @@ onMounted(() => {
         echoChannel.listen('.user.typing', handleTypingEvent);
         echoChannel.listen('.messages.read', handleReadEvent);
         echoChannel.listen('.user.presence', handlePresenceEvent);
+        echoChannel.listen('.chat.event', handleChatEvent);
     }
 });
 

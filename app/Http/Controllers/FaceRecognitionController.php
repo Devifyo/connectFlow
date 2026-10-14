@@ -23,7 +23,7 @@ class FaceRecognitionController extends Controller
         $tenant = Tenant::find($user->tenant_id);
 
         return response()->json([
-            'enabled' => (bool) $tenant?->face_recognition_enabled,
+            'enabled' => (bool) $tenant?->face_recognition_enabled && !$user->face_exempt,
             'enrolled' => !is_null($user->face_enrolled_at),
             'enrolled_at' => $user->face_enrolled_at,
         ]);

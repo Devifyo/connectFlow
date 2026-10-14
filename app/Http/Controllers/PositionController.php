@@ -18,6 +18,7 @@ class PositionController extends Controller
                 'title' => $p->title,
                 'description' => $p->description,
                 'is_active' => $p->is_active,
+                'can_create_groups' => (bool) $p->can_create_groups,
                 'sort_order' => $p->sort_order,
                 'users_count' => $p->users_count,
                 'created_at' => $p->created_at?->toIso8601String(),
@@ -55,6 +56,7 @@ class PositionController extends Controller
                 'title' => $position->title,
                 'description' => $position->description,
                 'is_active' => $position->is_active,
+                'can_create_groups' => false,
                 'users_count' => 0,
                 'created_at' => $position->created_at?->toIso8601String(),
             ],
@@ -67,6 +69,7 @@ class PositionController extends Controller
             'title' => 'sometimes|string|max:255',
             'description' => 'sometimes|nullable|string|max:1000',
             'is_active' => 'sometimes|boolean',
+            'can_create_groups' => 'sometimes|boolean',
         ]);
 
         $position = Position::findOrFail($id);
@@ -78,7 +81,7 @@ class PositionController extends Controller
             }
         }
 
-        $fields = ['title', 'description', 'is_active'];
+        $fields = ['title', 'description', 'is_active', 'can_create_groups'];
         foreach ($fields as $field) {
             if ($request->has($field)) {
                 $position->$field = $request->$field;

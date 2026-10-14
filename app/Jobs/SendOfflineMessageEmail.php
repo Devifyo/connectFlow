@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Models\Conversation;
 use App\Models\EmailTemplate;
 use App\Models\User;
 use App\Support\IdHash;
@@ -24,6 +25,7 @@ class SendOfflineMessageEmail implements ShouldQueue
         public int $senderId,
         public string $messageBody,
         public int $conversationId,
+        public ?int $messageId = null,
     ) {}
 
     public function handle(): void
@@ -35,27 +37,37 @@ class SendOfflineMessageEmail implements ShouldQueue
             return;
         }
 
+        $conversation = Conversation::withoutGlobalScopes()->find($this->conversationId);
+        if (!$conversation) {
+            return;
+        }
+
         if ($this->resolvePresence($recipient) !== 'offline') {
             return;
         }
+
+        $preview = $conversation->type === 'group'
+            ? "In \"{$conversation->title}\": {$this->messageBody}"
+            : $this->messageBody;
 
         $rendered = EmailTemplate::render('new-message', [
             'app_name' => config('app.name', 'PitchFlow'),
             'recipient_name' => $recipient->name,
             'sender_name' => $sender->name,
             'sender_initial' => strtoupper(substr($sender->name, 0, 1)),
-            'message_preview' => \Illuminate\Support\Str::limit($this->messageBody, 200),
+            'message_preview' => \Illuminate\Support\Str::limit($preview, 200),
             'conversation_id' => IdHash::encode($this->conversationId),
             'app_url' => 'https://pitchflow.devifyo.cloud',
             'year' => date('Y'),
         ]);
 
-        if (!$rendered) {
+        $to = $recipient->getNotificationEmailAddress();
+        if (!$rendered || !$to) {
             return;
         }
 
-        Mail::html($rendered['body'], function ($mail) use ($recipient, $rendered) {
-            $mail->to($recipient->getNotificationEmailAddress())->subject($rendered['subject']);
+        Mail::html($rendered['body'], function ($mail) use ($to, $rendered) {
+            $mail->to($to)->subject($rendered['subject']);
         });
     }
 

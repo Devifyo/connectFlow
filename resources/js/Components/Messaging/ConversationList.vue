@@ -1,13 +1,19 @@
 <script setup>
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
+import { usePage } from '@inertiajs/vue3';
 import { useMessaging } from '@/composables/useMessaging';
 import { vProtectedSrc } from '@/directives/protectedSrc';
+import CreateGroupModal from './CreateGroupModal.vue';
 
 const {
     conversations, activeConversation,
     searchUsers, startConversation,
     setActiveConversation, fetchConversations,
 } = useMessaging();
+
+const page = usePage();
+const canCreateGroups = computed(() => !!page.props.auth.can_create_groups);
+const showCreateGroup = ref(false);
 
 const query = ref('');
 const searchResults = ref([]);
@@ -31,7 +37,7 @@ function onSearch() {
 function selectUser(user) {
     query.value = '';
     searchResults.value = [];
-    const existing = conversations.value.find(c => c.user?.id === user.id);
+    const existing = conversations.value.find(c => !c.is_group && c.user?.id === user.id);
     if (existing) {
         setActiveConversation(existing);
     } else {
@@ -65,6 +71,11 @@ function initials(name) {
     <div class="flex-1 flex flex-col min-h-0">
         <!-- Search -->
         <div class="p-3 relative">
+            <button v-if="canCreateGroups" @click="showCreateGroup = true"
+                class="w-full mb-2 flex items-center justify-center gap-1.5 py-2 text-xs font-semibold rounded-xl bg-brand/10 text-brand hover:bg-brand/20 transition-colors">
+                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z"/></svg>
+                New group
+            </button>
             <div class="relative">
                 <svg class="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-surface-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/>
@@ -117,7 +128,11 @@ function initials(name) {
                     : 'hover:bg-surface-800/30 border-l-transparent'"
             >
                 <div class="relative flex-shrink-0">
-                    <div class="w-9 h-9 rounded-full flex items-center justify-center overflow-hidden"
+                    <div v-if="conv.is_group" class="w-9 h-9 rounded-xl flex items-center justify-center"
+                        :class="conv.unread ? 'bg-brand/20 text-brand' : 'bg-indigo-500/15 text-indigo-300'">
+                        <span class="text-[10px] font-bold">{{ initials(conv.title) }}</span>
+                    </div>
+                    <div v-else class="w-9 h-9 rounded-full flex items-center justify-center overflow-hidden"
                         :class="conv.unread ? 'bg-brand/15' : 'bg-surface-700'">
                         <img v-if="conv.user?.profile_picture_url" v-protected-src="conv.user.profile_picture_url" class="w-full h-full object-cover" draggable="false" @contextmenu.prevent />
                         <span v-else class="text-[10px] font-bold"
@@ -125,17 +140,19 @@ function initials(name) {
                             {{ initials(conv.user?.name) }}
                         </span>
                     </div>
+                    <template v-if="!conv.is_group">
                     <span v-if="conv.user?.presence_status === 'online'"
                         class="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-400 ring-2 ring-surface-900"></span>
                     <span v-else-if="conv.user?.presence_status === 'away'"
                         class="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-amber-400 ring-2 ring-surface-900"></span>
                     <span v-else
                         class="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-surface-500 ring-2 ring-surface-900"></span>
+                    </template>
                 </div>
                 <div class="flex-1 min-w-0">
                     <div class="flex items-center justify-between gap-2">
                         <span class="text-xs truncate" :class="conv.unread ? 'font-bold text-surface-100' : 'font-medium text-surface-200'">
-                            {{ conv.user?.name || 'Unknown' }}
+                            {{ conv.is_group ? conv.title : (conv.user?.name || 'Unknown') }}
                         </span>
                         <span class="text-[9px] flex-shrink-0" :class="conv.unread ? 'text-brand font-semibold' : 'text-surface-500'">
                             {{ timeAgo(conv.updated_at) }}
@@ -143,7 +160,10 @@ function initials(name) {
                     </div>
                     <div class="flex items-center justify-between gap-2 mt-0.5">
                         <p v-if="conv.latest_message" class="text-[11px] truncate" :class="conv.unread ? 'text-surface-300' : 'text-surface-500'">
-                            <span v-if="conv.latest_message.is_mine" class="text-surface-400">You: </span>{{ conv.latest_message.body }}
+                            <template v-if="conv.latest_message.type !== 'system'">
+                                <span v-if="conv.latest_message.is_mine" class="text-surface-400">You: </span>
+                                <span v-else-if="conv.is_group" class="text-surface-400">{{ conv.latest_message.sender_name?.split(' ')[0] }}: </span>
+                            </template>{{ conv.latest_message.body }}
                         </p>
                         <span v-if="conv.unread" class="min-w-[18px] h-[18px] rounded-full bg-brand flex items-center justify-center px-1 flex-shrink-0">
                             <span class="text-[9px] font-bold text-surface-950 leading-none">{{ conv.unread > 9 ? '9+' : conv.unread }}</span>
@@ -152,5 +172,7 @@ function initials(name) {
                 </div>
             </button>
         </div>
+
+        <CreateGroupModal v-if="showCreateGroup" @close="showCreateGroup = false" />
     </div>
 </template>

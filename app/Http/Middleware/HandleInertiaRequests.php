@@ -39,7 +39,7 @@ class HandleInertiaRequests extends Middleware
         if ($request->user()) {
             $tenant = \App\Models\Tenant::find($request->user()->tenant_id);
             $faceRecognition = [
-                'enabled' => (bool) $tenant?->face_recognition_enabled,
+                'enabled' => (bool) $tenant?->face_recognition_enabled && !$request->user()->face_exempt,
                 'enrolled' => !is_null($request->user()->face_enrolled_at),
             ];
         }
@@ -48,6 +48,7 @@ class HandleInertiaRequests extends Middleware
             ...parent::share($request),
             'auth' => [
                 'user' => $request->user(),
+                'can_create_groups' => (bool) $request->user()?->canCreateGroups(),
             ],
             'impersonating' => $impersonatorId ? [
                 'admin_name' => $impersonator?->name,
