@@ -138,9 +138,10 @@ class BidController extends Controller
             'job_text' => 'required|string|min:20|max:15000',
         ]);
 
-        $apiKey = config('services.gemini.api_key');
+        $provider = config('services.job_ai.provider', 'deepseek');
+        $apiKey = $provider === 'deepseek' ? config('services.deepseek.api_key') : config('services.gemini.api_key');
         if (!$apiKey) {
-            return response()->json(['error' => 'Gemini API key not configured'], 500);
+            return response()->json(['error' => ucfirst($provider) . ' API key not configured'], 500);
         }
 
         $today = now('Asia/Kolkata')->format('F j, Y');
@@ -185,24 +186,40 @@ JOB POSTING:
 PROMPT;
 
         try {
-            $response = Http::timeout(30)->post(
-                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={$apiKey}",
-                [
-                    'contents' => [
-                        ['parts' => [['text' => $prompt]]],
+            if ($provider === 'deepseek') {
+                // OpenAI-compatible chat completions; json_object mode guarantees parseable output.
+                $response = Http::timeout(60)->withToken($apiKey)->post('https://api.deepseek.com/chat/completions', [
+                    'model' => config('services.deepseek.model', 'deepseek-chat'),
+                    'messages' => [
+                        ['role' => 'system', 'content' => 'You are a precise analyst. Respond only with the JSON object requested.'],
+                        ['role' => 'user', 'content' => $prompt],
                     ],
-                    'generationConfig' => [
-                        'temperature' => 0.3,
-                        'maxOutputTokens' => 4096,
-                    ],
-                ]
-            );
+                    'temperature' => 0.3,
+                    'max_tokens' => 4096,
+                    'response_format' => ['type' => 'json_object'],
+                ]);
+                $text = $response->ok() ? $response->json('choices.0.message.content', '') : '';
+            } else {
+                $response = Http::timeout(30)->post(
+                    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={$apiKey}",
+                    [
+                        'contents' => [
+                            ['parts' => [['text' => $prompt]]],
+                        ],
+                        'generationConfig' => [
+                            'temperature' => 0.3,
+                            'maxOutputTokens' => 4096,
+                        ],
+                    ]
+                );
+                $text = $response->ok() ? $response->json('candidates.0.content.parts.0.text', '') : '';
+            }
 
             if (!$response->ok()) {
+                \Illuminate\Support\Facades\Log::warning("[job-ai] {$provider} error " . $response->status() . ': ' . substr($response->body(), 0, 300));
                 return response()->json(['error' => 'AI service error'], 502);
             }
 
-            $text = $response->json('candidates.0.content.parts.0.text', '');
             $text = preg_replace('/^```json\s*|```\s*$/m', '', trim($text));
             $analysis = json_decode($text, true);
 

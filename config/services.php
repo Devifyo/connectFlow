@@ -47,4 +47,14 @@ return [
         'provider' => env('FACE_AI_PROVIDER', 'anthropic'),
     ],
 
+    'deepseek' => [
+        'api_key' => env('DEEPSEEK_API_KEY'),
+        'model' => env('DEEPSEEK_MODEL', 'deepseek-chat'),
+    ],
+
+    // Provider for the Upwork job red-flag analysis: 'deepseek' (text only) or 'gemini'.
+    'job_ai' => [
+        'provider' => env('JOB_AI_PROVIDER', 'deepseek'),
+    ],
+
 ];

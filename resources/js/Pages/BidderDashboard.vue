@@ -728,6 +728,15 @@ function stopFaceMetrics() {
 
 // --- URL Checker ---
 const url = ref('');
+const withAi = ref(false);
+const showCustomRange = ref(false);
+const canPaste = typeof navigator !== 'undefined' && !!navigator.clipboard?.readText;
+async function pasteUrl() {
+    try {
+        const text = (await navigator.clipboard.readText()).trim();
+        if (text) { url.value = text; checkStatus.value = null; }
+    } catch (e) {}
+}
 const checkStatus = ref(null);
 const checkMessage = ref('');
 const isChecking = ref(false);
@@ -1503,57 +1512,71 @@ onUnmounted(() => {
 
             <!-- Tab: Submit Job -->
             <div v-show="activeTab === 'checker'">
-                <div class="card p-6 sm:p-8 max-w-2xl">
-                    <h2 class="text-lg font-semibold text-surface-100 mb-1">Submit Job</h2>
-                    <p class="text-sm text-surface-400 mb-1">Paste a job URL to verify no one on your team has already bid.</p>
-                    <p class="text-xs text-amber-400/80 mb-6">Important: Always submit your jobs here so that we can track your project, else your applied project may go untracked.</p>
+                <div class="card p-5 sm:p-8 max-w-2xl">
+                    <div class="flex items-start gap-3 mb-5">
+                        <div class="w-10 h-10 rounded-xl bg-brand/15 border border-brand/20 flex items-center justify-center flex-shrink-0">
+                            <svg class="w-5 h-5 text-brand" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244"/></svg>
+                        </div>
+                        <div class="min-w-0">
+                            <h2 class="text-lg font-semibold text-surface-100 leading-tight">Submit a job</h2>
+                            <p class="text-sm text-surface-400 mt-0.5">Paste the Upwork link. We check that nobody on your team has bid on it, then record it under your name.</p>
+                        </div>
+                    </div>
 
-                    <div class="space-y-4">
+                    <div class="space-y-3">
+                        <label class="block text-xs font-medium text-surface-400">Job link</label>
                         <div class="relative">
                             <input
                                 type="url"
+                                inputmode="url"
+                                autocomplete="off"
+                                autocapitalize="off"
+                                spellcheck="false"
                                 v-model="url"
-                                @keyup.enter="checkUrl"
+                                @keyup.enter="withAi ? checkAndAnalyze() : checkUrl()"
                                 placeholder="https://www.upwork.com/jobs/..."
-                                class="input-field py-3.5 pr-10"
+                                class="input-field py-3.5 pr-24 text-sm"
                             />
-                            <svg class="w-4 h-4 text-surface-500 absolute right-4 top-1/2 -translate-y-1/2" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-                                <path stroke-linecap="round" stroke-linejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244" />
-                            </svg>
+                            <div class="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                                <button v-if="url" type="button" @click="url = ''; checkStatus = null;" class="p-1.5 rounded-lg text-surface-500 hover:text-surface-200 hover:bg-surface-700/60 transition-colors" aria-label="Clear">
+                                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12"/></svg>
+                                </button>
+                                <button v-else-if="canPaste" type="button" @click="pasteUrl" class="px-2.5 py-1.5 rounded-lg text-xs font-medium text-brand bg-brand/10 hover:bg-brand/20 transition-colors">Paste</button>
+                            </div>
                         </div>
 
-                        <div class="flex gap-3">
-                            <button
-                                @click="checkUrl"
-                                :disabled="isChecking || !url.trim()"
-                                class="btn-primary flex-1 py-3 text-sm"
-                                :class="{ 'opacity-50 pointer-events-none': isChecking || !url.trim() }"
-                            >
-                                <svg v-if="!isChecking" class="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                                    <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
-                                </svg>
-                                <svg v-else class="animate-spin w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24">
-                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                </svg>
-                                {{ isChecking ? 'Submitting...' : 'Submit Job' }}
-                            </button>
-                            <button
-                                @click="checkAndAnalyze"
-                                :disabled="isChecking || isAnalyzing || !url.trim()"
-                                class="flex-1 py-3 text-sm font-medium rounded-xl inline-flex items-center justify-center transition-all border border-purple-500/30 bg-purple-500/10 text-purple-400 hover:bg-purple-500/20"
-                                :class="{ 'opacity-50 pointer-events-none': isChecking || isAnalyzing || !url.trim() }"
-                            >
-                                <svg v-if="!isAnalyzing" class="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                                    <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456z" />
-                                </svg>
-                                <svg v-else class="animate-spin w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24">
-                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                </svg>
-                                {{ isAnalyzing ? 'Analyzing...' : 'Check + AI Analyze' }}
-                            </button>
-                        </div>
+                        <!-- AI analysis switch -->
+                        <button type="button" @click="withAi = !withAi" class="w-full flex items-center gap-3 px-3.5 py-3 rounded-xl border transition-colors text-left"
+                            :class="withAi ? 'bg-purple-500/10 border-purple-500/30' : 'bg-surface-800/40 border-surface-700/40 hover:border-surface-600'">
+                            <span class="relative inline-flex w-9 h-5 rounded-full transition-colors flex-shrink-0" :class="withAi ? 'bg-purple-500' : 'bg-surface-600'">
+                                <span class="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform" :class="withAi ? 'translate-x-4' : ''"></span>
+                            </span>
+                            <span class="min-w-0">
+                                <span class="block text-sm font-medium" :class="withAi ? 'text-purple-200' : 'text-surface-200'">AI risk check</span>
+                                <span class="block text-[11px] text-surface-500">Scores the client and budget for red flags before you bid.</span>
+                            </span>
+                        </button>
+
+                        <button
+                            @click="withAi ? checkAndAnalyze() : checkUrl()"
+                            :disabled="isChecking || isAnalyzing || !url.trim()"
+                            class="btn-primary w-full py-3.5 text-sm"
+                            :class="{ 'opacity-50 pointer-events-none': isChecking || isAnalyzing || !url.trim() }"
+                        >
+                            <svg v-if="isChecking || isAnalyzing" class="animate-spin w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            <svg v-else class="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+                            </svg>
+                            {{ isAnalyzing ? 'Analyzing job...' : isChecking ? 'Checking...' : (withAi ? 'Check & analyze' : 'Check & submit') }}
+                        </button>
+
+                        <p class="flex items-start gap-2 text-[11px] text-amber-300/80 leading-snug">
+                            <svg class="w-3.5 h-3.5 flex-shrink-0 mt-px" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m0 3.75h.008v.008H12v-.008Z"/><circle cx="12" cy="12" r="9"/></svg>
+                            <span>Submit every job you apply to here, otherwise it won't be tracked against your work.</span>
+                        </p>
                     </div>
 
                     <!-- Result -->
@@ -1736,22 +1759,27 @@ onUnmounted(() => {
                             {{ f.label }}
                         </button>
 
-                        <div class="flex flex-wrap items-center gap-2 w-full sm:w-auto sm:ml-auto mt-2 sm:mt-0">
-                            <input type="date" v-model="customFrom" class="input-field text-xs py-1.5 px-2.5 w-[calc(50%-20px)] sm:w-32" />
+                        <button @click="showCustomRange = !showCustomRange" class="sm:hidden ml-auto text-xs font-medium px-2.5 py-1.5 rounded-lg transition-colors"
+                            :class="showCustomRange || activeFilter === 'custom' ? 'text-brand bg-brand/10' : 'text-surface-400 bg-surface-800/50 border border-surface-700/30'">
+                            Dates
+                        </button>
+
+                        <div class="items-center gap-2 w-full sm:w-auto sm:ml-auto mt-2 sm:mt-0" :class="showCustomRange || activeFilter === 'custom' ? 'flex' : 'hidden sm:flex'">
+                            <input type="date" v-model="customFrom" class="input-field text-xs py-1.5 px-2.5 flex-1 min-w-0 sm:w-32 sm:flex-none" />
                             <span class="text-xs text-surface-500">to</span>
-                            <input type="date" v-model="customTo" class="input-field text-xs py-1.5 px-2.5 w-[calc(50%-20px)] sm:w-32" />
-                            <button @click="applyCustomRange" class="btn-secondary text-xs px-3 py-1.5 w-full sm:w-auto">Apply</button>
+                            <input type="date" v-model="customTo" class="input-field text-xs py-1.5 px-2.5 flex-1 min-w-0 sm:w-32 sm:flex-none" />
+                            <button @click="applyCustomRange" class="btn-secondary text-xs px-3 py-1.5">Apply</button>
                         </div>
                     </div>
 
                     <!-- Status filter row -->
-                    <div class="flex flex-wrap items-center gap-2 mt-3 pt-3 border-t border-surface-700/30">
-                        <span class="text-xs font-medium text-surface-400 mr-1">Status:</span>
+                    <div class="flex items-center gap-2 mt-3 pt-3 border-t border-surface-700/30 overflow-x-auto scrollbar-none -mx-1 px-1">
+                        <span class="text-xs font-medium text-surface-400 mr-1 flex-shrink-0">Status:</span>
                         <button
                             v-for="s in [{key:'',label:'All'},{key:'Submitted',label:'Submitted'},{key:'Interviewing',label:'Interviewing'},{key:'Hired',label:'Hired'},{key:'Rejected',label:'Rejected'}]"
                             :key="s.key"
                             @click="statusFilter = s.key; fetchBids()"
-                            class="px-2.5 py-1 rounded-md text-xs font-medium transition-all"
+                            class="px-2.5 py-1 rounded-md text-xs font-medium transition-all whitespace-nowrap flex-shrink-0"
                             :class="statusFilter === s.key ? 'bg-surface-700 text-surface-100' : 'text-surface-500 hover:text-surface-300'"
                         >
                             {{ s.label }}
@@ -1779,8 +1807,52 @@ onUnmounted(() => {
                         <p class="text-xs text-surface-600 mt-1">Submit your first bid using the Submit Job tab.</p>
                     </div>
 
-                    <!-- Table -->
-                    <div v-else class="overflow-x-auto">
+                    <!-- Phone: one card per proposal -->
+                    <div v-else class="sm:hidden divide-y divide-surface-800/40">
+                        <div v-for="bid in bids" :key="'m-' + bid.bid_id" class="p-4">
+                            <div class="flex items-start justify-between gap-3">
+                                <div class="min-w-0 flex-1">
+                                    <input v-if="editingBidId === bid.bid_id" v-model="editBidForm.job_title" type="text" placeholder="Job title" class="input-field text-sm w-full" @keydown.enter="saveEditBid" @keydown.esc="cancelEditBid" />
+                                    <p v-else class="text-sm font-medium text-surface-100 leading-snug line-clamp-2">{{ bid.job_title || 'Untitled Job' }}</p>
+                                </div>
+                                <span class="flex-shrink-0" :class="{
+                                    'badge-success': bid.status === 'Hired',
+                                    'badge-warning': bid.status === 'Interviewing',
+                                    'badge-neutral': bid.status === 'Submitted',
+                                    'badge-danger': bid.status === 'Rejected',
+                                }">{{ bid.status }}</span>
+                            </div>
+                            <div class="mt-2 flex items-center gap-x-3 gap-y-1 flex-wrap text-[11px] text-surface-500">
+                                <span class="inline-flex items-center gap-1">
+                                    <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5"/></svg>
+                                    {{ formatDate(bid.created_at) }} · {{ formatTime(bid.created_at) }}
+                                </span>
+                                <span class="inline-flex items-center gap-1">
+                                    <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                                    <template v-if="editingBidId === bid.bid_id"><input v-model="editBidForm.connects_used" type="number" min="1" class="input-field text-xs font-mono w-16 py-0.5 px-1.5" @keydown.enter="saveEditBid" @keydown.esc="cancelEditBid" /></template>
+                                    <template v-else>{{ bid.connects_used }} connects</template>
+                                </span>
+                                <span class="badge-neutral !text-[10px] !py-0 !px-1.5">{{ bid.platform_name }}</span>
+                            </div>
+                            <div class="mt-2.5 flex items-center justify-between gap-3">
+                                <a :href="bid.job_url" target="_blank" class="inline-flex items-center gap-1 text-xs text-brand/90 hover:text-brand">
+                                    <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"/></svg>
+                                    Open job
+                                </a>
+                                <div v-if="editingBidId === bid.bid_id" class="flex items-center gap-3">
+                                    <button @click="saveEditBid" :disabled="isSavingBid" class="text-xs text-brand font-semibold">{{ isSavingBid ? 'Saving…' : 'Save' }}</button>
+                                    <button @click="cancelEditBid" class="text-xs text-surface-500">Cancel</button>
+                                </div>
+                                <button v-else @click="startEditBid(bid)" class="inline-flex items-center gap-1 text-xs text-surface-500 hover:text-surface-300">
+                                    <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Z"/></svg>
+                                    Edit
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Desktop table -->
+                    <div v-if="!isLoadingBids && bids.length > 0" class="hidden sm:block overflow-x-auto">
                         <table class="w-full">
                             <thead>
                                 <tr class="border-b border-surface-700/30">
@@ -1841,7 +1913,7 @@ onUnmounted(() => {
                     <!-- Pagination -->
                     <div v-if="bidsPagination.last_page > 1" class="px-5 py-3 border-t border-surface-700/30 flex items-center justify-between">
                         <span class="text-xs text-surface-500">
-                            Page {{ bidsPagination.current_page }} of {{ bidsPagination.last_page }} ({{ bidsPagination.total }} total)
+                            Page {{ bidsPagination.current_page }} of {{ bidsPagination.last_page }}<span class="hidden sm:inline"> ({{ bidsPagination.total }} total)</span>
                         </span>
                         <div class="flex gap-1">
                             <button
