@@ -157,6 +157,46 @@ class TenantAdminController extends Controller
         return response()->json(['status' => 'success']);
     }
 
+    public function siteStatus()
+    {
+        return response()->json($this->siteStatusPayload(\App\Models\Tenant::find(auth()->user()->tenant_id)));
+    }
+
+    /** Take the tenant's site down for members (with a reason) or bring it back up. */
+    public function updateSiteStatus(Request $request)
+    {
+        $request->validate([
+            'enabled' => 'required|boolean',
+            'reason' => 'required_if:enabled,true|nullable|string|max:500',
+        ]);
+
+        $tenant = \App\Models\Tenant::findOrFail(auth()->user()->tenant_id);
+        $enabled = $request->boolean('enabled');
+
+        $tenant->update([
+            'maintenance_enabled' => $enabled,
+            'maintenance_reason' => $enabled ? trim($request->reason) : null,
+            'maintenance_started_at' => $enabled ? ($tenant->maintenance_enabled ? $tenant->maintenance_started_at : now()) : null,
+            'maintenance_by' => $enabled ? auth()->id() : null,
+        ]);
+
+        \Illuminate\Support\Facades\Log::info(sprintf('[maintenance] tenant %d %s by user %d%s',
+            $tenant->tenant_id, $enabled ? 'DOWN' : 'UP', auth()->id(), $enabled ? ': ' . $tenant->maintenance_reason : ''));
+
+        return response()->json($this->siteStatusPayload($tenant->fresh()));
+    }
+
+    private function siteStatusPayload(?\App\Models\Tenant $tenant): array
+    {
+        $by = $tenant?->maintenance_by ? User::withoutGlobalScopes()->find($tenant->maintenance_by) : null;
+        return [
+            'enabled' => (bool) $tenant?->maintenance_enabled,
+            'reason' => $tenant?->maintenance_reason,
+            'since' => $tenant?->maintenance_started_at?->toIso8601String(),
+            'by' => $by?->name,
+        ];
+    }
+
     public function updateNotificationEmail(Request $request)
     {
         $request->validate([
@@ -346,7 +386,9 @@ class TenantAdminController extends Controller
         $month = (int) ($request->month ?? now()->month);
 
         $startOfMonth = Carbon::createFromDate($year, $month, 1, 'UTC')->startOfDay();
-        $today = Carbon::now('UTC')->startOfDay();
+        // "Today" is the business-timezone date (IST); the calendar days are plain dates, so build it
+        // in the same UTC frame as $d for comparisons.
+        $today = Carbon::createFromFormat('Y-m-d', TimeLog::attendanceDate(Carbon::now()), 'UTC')->startOfDay();
 
         $logs = TimeLog::where('user_id', $user->id)
             ->whereBetween('date', [$startOfMonth->toDateString(), $startOfMonth->copy()->endOfMonth()->toDateString()])
@@ -586,7 +628,14 @@ class TenantAdminController extends Controller
 
         $logoutTime = $this->resolveManualPunchTime($request);
         if ($logoutTime->lte($log->login_time)) {
-            $logoutTime = $logoutTime->addDay();
+            // Overnight shift: the shift started on the chosen date and the typed time is early next
+            // morning, so it belongs to the following day. Anything else is simply before the punch-in.
+            $loginDate = TimeLog::attendanceDate($log->login_time);
+            if (!$request->boolean('now') && $request->date === $loginDate) {
+                $logoutTime = $logoutTime->addDay();
+            } else {
+                return response()->json(['error' => 'Punch-out time is before the punch-in at ' . $this->formatAttendanceTime($log->login_time) . '. Enter a later time or use Now.'], 400);
+            }
         }
 
         // Guard against stale defaults: a manual punch can never be recorded ahead of the real clock.

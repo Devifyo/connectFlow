@@ -20,6 +20,18 @@ class TimeLog extends Model
         'punch_out_lng' => 'decimal:7',
     ];
 
+    /**
+     * Calendar day a moment belongs to for attendance: the business-timezone date, with the day
+     * rolling over at `attendance.day_starts_at_hour` (3 AM by default) rather than midnight.
+     */
+    public static function attendanceDate(\Carbon\CarbonInterface $moment): string
+    {
+        return $moment->copy()
+            ->setTimezone(config('attendance.timezone'))
+            ->subHours((int) config('attendance.day_starts_at_hour', 0))
+            ->toDateString();
+    }
+
     protected static function booted(): void
     {
         static::addGlobalScope(new \App\Models\Scopes\TenantScope);

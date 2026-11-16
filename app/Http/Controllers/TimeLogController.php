@@ -31,7 +31,9 @@ class TimeLogController extends Controller
             'tenant_id' => auth()->user()->tenant_id,
             'user_id' => auth()->id(),
             'login_time' => $now,
-            'date' => $now->toDateString(),
+            // Attendance day: IST date with the day rolling over at 3 AM, so a late shift that runs
+            // past midnight stays on the day it started.
+            'date' => TimeLog::attendanceDate($now),
             'punch_in_lat' => $request->latitude,
             'punch_in_lng' => $request->longitude,
             'punch_in_address' => $request->address,
@@ -95,7 +97,7 @@ class TimeLogController extends Controller
         $now = Carbon::now('UTC');
 
         $todayLogs = TimeLog::where('user_id', auth()->id())
-            ->where('date', $now->toDateString())
+            ->where('date', TimeLog::attendanceDate($now))
             ->get();
 
         $todayHours = 0.0;
@@ -127,7 +129,7 @@ class TimeLogController extends Controller
 
         $startOfMonth = Carbon::createFromDate($year, $month, 1, 'UTC')->startOfDay();
         $endOfMonth = $startOfMonth->copy()->endOfMonth()->endOfDay();
-        $today = Carbon::now('UTC')->startOfDay();
+        $today = Carbon::createFromFormat('Y-m-d', TimeLog::attendanceDate(Carbon::now()), 'UTC')->startOfDay();
 
         $logs = TimeLog::where('user_id', auth()->id())
             ->whereBetween('date', [$startOfMonth->toDateString(), $startOfMonth->copy()->endOfMonth()->toDateString()])

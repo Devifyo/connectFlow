@@ -16,6 +16,12 @@ return [
     'timezone' => env('ATTENDANCE_TIMEZONE', 'Asia/Kolkata'),
 
     /*
+    | Hour (0-23, in the timezone above) at which the attendance day rolls over. With 3, a shift
+    | that runs past midnight until 3 AM still belongs to the day it started.
+    */
+    'day_starts_at_hour' => (int) env('ATTENDANCE_DAY_STARTS_AT_HOUR', 3),
+
+    /*
     | Keep the untouched recording next to the converted mp4 (as .raw.webm) for diagnostics and
     | recovery. Costs disk; turn off once phone recordings are known to convert cleanly.
     */

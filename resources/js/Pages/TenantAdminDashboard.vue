@@ -311,14 +311,20 @@ function fmtAttendanceTime(iso) {
     if (!iso) return '';
     return new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: ATTENDANCE_TZ });
 }
+// The attendance day rolls over at 3 AM IST (a shift running past midnight stays on the day it started).
+const ATTENDANCE_DAY_START_HOUR = 3;
 function attendanceNowParts() {
-    const parts = new Intl.DateTimeFormat('en-GB', {
+    const fmt = (d) => new Intl.DateTimeFormat('en-GB', {
         timeZone: ATTENDANCE_TZ, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
-    }).formatToParts(new Date());
-    const get = (t) => parts.find(p => p.type === t)?.value;
-    return { date: `${get('year')}-${get('month')}-${get('day')}`, time: `${get('hour') === '24' ? '00' : get('hour')}:${get('minute')}` };
+    }).formatToParts(d);
+    const get = (parts, t) => parts.find(p => p.type === t)?.value;
+    const now = fmt(new Date());
+    const day = fmt(new Date(Date.now() - ATTENDANCE_DAY_START_HOUR * 3600 * 1000));
+    return { date: `${get(day, 'year')}-${get(day, 'month')}-${get(day, 'day')}`, time: `${get(now, 'hour') === '24' ? '00' : get(now, 'hour')}:${get(now, 'minute')}` };
 }
-const adminPunchIsToday = computed(() => dayEditOpen.value === attendanceNowParts().date);
+// "Now" is offered for today and for any day that still has an open session (a late-night shift
+// is filed under the day it started, which may already be yesterday).
+const adminPunchIsToday = computed(() => dayEditOpen.value === attendanceNowParts().date || (adminPunchMode.value === 'out' && selectedDaySessions.value.some(s => !s.out)));
 const adminPunchPreview = computed(() => {
     if (!dayEditOpen.value) return '';
     if (adminPunchUseNow.value && adminPunchIsToday.value) return `now (${fmtAttendanceTime(new Date().toISOString())} IST)`;
@@ -618,7 +624,7 @@ function openAdminPunch(mode) {
     adminPunchSuccess.value = '';
     const now = attendanceNowParts();
     // Editing today: default to the live IST clock. Past dates: a sensible shift default the admin must review.
-    adminPunchUseNow.value = dayEditOpen.value === now.date;
+    adminPunchUseNow.value = dayEditOpen.value === now.date || (mode === 'out' && selectedDaySessions.value.some(s => !s.out));
     adminPunchTime.value = adminPunchUseNow.value ? now.time : (mode === 'in' ? '09:00' : '18:00');
     adminPunchNote.value = '';
 }
@@ -1100,6 +1106,37 @@ const settingsForm = ref({
     password_confirmation: '',
 });
 const settingsSaving = ref(false);
+
+// --- Site access (maintenance mode for members) ---
+const siteStatus = ref({ enabled: false, reason: '', since: null, by: null });
+const siteDownReason = ref('');
+const siteStatusSaving = ref(false);
+const siteStatusError = ref('');
+async function fetchSiteStatus() {
+    try {
+        const { data } = await axios.get('/api/admin/site-status');
+        siteStatus.value = data;
+        if (data.enabled) siteDownReason.value = data.reason || '';
+    } catch (e) {}
+}
+async function setSiteDown(enabled) {
+    siteStatusError.value = '';
+    if (enabled && !siteDownReason.value.trim()) {
+        siteStatusError.value = 'Please give members a reason.';
+        return;
+    }
+    if (enabled && !siteStatus.value.enabled && !confirm('Take the site down for all members now? They will be shown your reason and will not be able to use the app until you bring it back up.')) return;
+    siteStatusSaving.value = true;
+    try {
+        const { data } = await axios.post('/api/admin/site-status', { enabled, reason: enabled ? siteDownReason.value.trim() : null });
+        siteStatus.value = data;
+        if (!enabled) siteDownReason.value = '';
+    } catch (e) {
+        siteStatusError.value = e.response?.data?.message || e.response?.data?.errors?.reason?.[0] || 'Could not update site status.';
+    } finally {
+        siteStatusSaving.value = false;
+    }
+}
 const settingsSaved = ref(false);
 const settingsErrors = ref({});
 const passwordSaving = ref(false);
@@ -1190,6 +1227,7 @@ async function savePassword() {
 }
 
 onMounted(async () => {
+    fetchSiteStatus();
     ready.value = true;
     loadSettingsForm();
     await Promise.all([fetchPipelineData(), fetchTeamData(), fetchAgencyProfile(), fetchPositions()]);
@@ -3082,6 +3120,50 @@ onUnmounted(() => {
             <!-- ========== SETTINGS TAB ========== -->
             <main v-else-if="activeTab === 'settings'" class="flex-1 p-6 overflow-auto" :class="{ 'animate-fade-in': ready }">
                 <div class="max-w-xl space-y-6">
+                    <!-- Site access / maintenance mode -->
+                    <div class="card p-6" :class="siteStatus.enabled ? 'border-red-500/40' : ''">
+                        <div class="flex items-start justify-between gap-4 mb-1">
+                            <h2 class="text-base font-semibold text-surface-100">Site Access</h2>
+                            <span class="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2 py-0.5 rounded-full"
+                                :class="siteStatus.enabled ? 'bg-red-500/15 text-red-300' : 'bg-emerald-500/15 text-emerald-300'">
+                                <span class="w-1.5 h-1.5 rounded-full" :class="siteStatus.enabled ? 'bg-red-400 animate-pulse' : 'bg-emerald-400'"></span>
+                                {{ siteStatus.enabled ? 'Down for members' : 'Live' }}
+                            </span>
+                        </div>
+                        <p class="text-sm text-surface-400 mb-5">Take the site down for your team with a reason. Members see the reason instead of the app until you bring it back. Admins keep access.</p>
+
+                        <div v-if="siteStatus.enabled" class="rounded-xl bg-red-500/5 border border-red-500/20 px-4 py-3 mb-4">
+                            <p class="text-[10px] font-semibold uppercase tracking-wider text-red-300/80 mb-1">Members currently see</p>
+                            <p class="text-sm text-surface-200 whitespace-pre-line">{{ siteStatus.reason }}</p>
+                            <p class="text-[11px] text-surface-500 mt-2">
+                                Down since {{ siteStatus.since ? new Date(siteStatus.since).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '' }} IST<span v-if="siteStatus.by"> by {{ siteStatus.by }}</span>
+                            </p>
+                        </div>
+
+                        <div class="space-y-3">
+                            <div>
+                                <label class="block text-xs font-medium text-surface-400 mb-1.5">Reason shown to members</label>
+                                <textarea v-model="siteDownReason" rows="3" maxlength="500" class="input-field text-sm w-full resize-none"
+                                    placeholder="e.g. Office closed today for maintenance. Back by 2 PM."></textarea>
+                                <p class="text-[11px] text-surface-500 mt-1">{{ siteDownReason.length }}/500</p>
+                            </div>
+                            <p v-if="siteStatusError" class="text-xs text-red-400">{{ siteStatusError }}</p>
+                            <div class="flex items-center gap-3">
+                                <button v-if="!siteStatus.enabled" @click="setSiteDown(true)" :disabled="siteStatusSaving"
+                                    class="text-sm py-2.5 px-5 rounded-xl font-semibold bg-red-500 text-white hover:bg-red-600 transition-colors" :class="{ 'opacity-50': siteStatusSaving }">
+                                    {{ siteStatusSaving ? 'Updating...' : 'Take site down' }}
+                                </button>
+                                <template v-else>
+                                    <button @click="setSiteDown(false)" :disabled="siteStatusSaving"
+                                        class="text-sm py-2.5 px-5 rounded-xl font-semibold bg-emerald-500 text-white hover:bg-emerald-600 transition-colors" :class="{ 'opacity-50': siteStatusSaving }">
+                                        {{ siteStatusSaving ? 'Updating...' : 'Bring site back up' }}
+                                    </button>
+                                    <button @click="setSiteDown(true)" :disabled="siteStatusSaving" class="btn-ghost text-sm py-2.5 px-4">Update reason</button>
+                                </template>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- Profile Info -->
                     <div class="card p-6">
                         <h2 class="text-base font-semibold text-surface-100 mb-1">Profile Information</h2>

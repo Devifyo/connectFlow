@@ -21,6 +21,19 @@ Route::get('/welcome', function () {
     ]);
 })->name('welcome');
 
+// Members land here while their admin has taken the site down; also lets them poll for it coming back.
+Route::get('/maintenance', function () {
+    $tenant = \App\Models\Tenant::find(auth()->user()->tenant_id);
+    $state = $tenant?->maintenanceState();
+    if (!$state) return redirect()->route('dashboard');
+    return Inertia::render('Maintenance', $state);
+})->middleware(['auth'])->name('maintenance');
+
+Route::get('/api/maintenance/status', function () {
+    $tenant = \App\Models\Tenant::find(auth()->user()->tenant_id);
+    return response()->json(['maintenance' => (bool) $tenant?->maintenance_enabled, 'reason' => $tenant?->maintenance_reason]);
+})->middleware(['auth']);
+
 Route::get('/dashboard', function () {
     $user = auth()->user();
     if ($user->hasRole('SuperAdmin')) return Inertia::render('SuperAdminCommandCenter');
@@ -75,6 +88,8 @@ Route::middleware('auth')->group(function () {
         Route::post('/api/admin/agency-profile', [\App\Http\Controllers\TenantAdminController::class, 'updateAgencyProfile']);
         Route::put('/api/admin/bids/{id}/status', [\App\Http\Controllers\TenantAdminController::class, 'updateBidStatus']);
         Route::put('/api/admin/notification-email', [\App\Http\Controllers\TenantAdminController::class, 'updateNotificationEmail']);
+        Route::get('/api/admin/site-status', [\App\Http\Controllers\TenantAdminController::class, 'siteStatus']);
+        Route::post('/api/admin/site-status', [\App\Http\Controllers\TenantAdminController::class, 'updateSiteStatus']);
 
         // Positions
         Route::get('/api/admin/positions', [\App\Http\Controllers\PositionController::class, 'index']);
