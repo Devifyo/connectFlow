@@ -12,7 +12,7 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Spatie\Permission\Traits\HasRoles;
 
-#[Fillable(['name', 'email', 'password', 'tenant_id', 'is_active', 'designation', 'employee_id', 'joining_date', 'salary', 'min_hours_per_day', 'address', 'profile_picture', 'face_enrolled_at', 'higher_education', 'date_of_birth', 'phone_country_code', 'phone_number', 'notification_email'])]
+#[Fillable(['name', 'email', 'password', 'tenant_id', 'is_active', 'designation', 'employee_id', 'joining_date', 'salary', 'min_hours_per_day', 'min_punch_recording_seconds', 'address', 'profile_picture', 'face_enrolled_at', 'higher_education', 'date_of_birth', 'phone_country_code', 'phone_number', 'notification_email'])]
 #[Hidden(['password', 'remember_token'])]
 class User extends Authenticatable
 {
@@ -36,6 +36,7 @@ class User extends Authenticatable
             'date_of_birth' => 'date',
             'face_enrolled_at' => 'datetime',
             'face_exempt' => 'boolean',
+            'min_punch_recording_seconds' => 'integer',
         ];
     }
 
@@ -118,6 +119,21 @@ class User extends Authenticatable
      * Address for notification emails, or null when it's on a suppressed
      * (undeliverable) domain — sending there just bounces back to us.
      */
+    /**
+     * Live app presence as chat sees it: 'online' / 'away' / 'offline'. The heartbeat marks a
+     * user online while the app is open and foregrounded, away when backgrounded, and anything
+     * that stops reporting counts as offline after a short grace period.
+     */
+    public function livePresence(): string
+    {
+        if (!$this->last_active_at) return 'offline';
+        $seconds = abs(now()->diffInSeconds($this->last_active_at));
+        $status = $this->presence_status ?? 'offline';
+        if ($status === 'online' && $seconds > 45) return 'offline';
+        if ($status === 'away' && $seconds > 90) return 'offline';
+        return $status;
+    }
+
     public function getNotificationEmailAddress(): ?string
     {
         $address = $this->notification_email ?: $this->email;

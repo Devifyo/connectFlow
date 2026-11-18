@@ -41,6 +41,7 @@ class HandleInertiaRequests extends Middleware
             $faceRecognition = [
                 'enabled' => (bool) $tenant?->face_recognition_enabled && !$request->user()->face_exempt,
                 'enrolled' => !is_null($request->user()->face_enrolled_at),
+                'min_recording_seconds' => (int) ($request->user()->min_punch_recording_seconds ?? 0),
             ];
         }
 

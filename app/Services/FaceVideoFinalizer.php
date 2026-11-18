@@ -300,6 +300,12 @@ class FaceVideoFinalizer
         if ($row && $row->file_path !== $newPath) {
             $row->update(['file_path' => $newPath]);
         }
+
+        // Face verified but no punch attached yet: the member may have left before "Confirm &
+        // close". Check again in a few minutes and email them if the punch still isn't there.
+        if ($row && $row->verified && !$row->time_log_id && in_array($row->type, ['punch_in', 'punch_out'], true)) {
+            \App\Jobs\SendUnconfirmedPunchEmail::schedule($row->id);
+        }
         return true;
     }
 

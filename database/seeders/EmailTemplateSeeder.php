@@ -19,6 +19,24 @@ class EmailTemplateSeeder extends Seeder
         );
 
         EmailTemplate::updateOrCreate(
+            ['slug' => 'punch-not-marked'],
+            [
+                'name' => 'Punch Not Marked (Unconfirmed)',
+                'subject' => 'Action needed: your {{punch_label}} was not marked — {{app_name}}',
+                'body_html' => $this->punchNotMarkedTemplate(),
+            ]
+        );
+
+        EmailTemplate::updateOrCreate(
+            ['slug' => 'forgot-punch-out'],
+            [
+                'name' => 'Forgot To Punch Out',
+                'subject' => 'Reminder: you are still punched in — {{app_name}}',
+                'body_html' => $this->forgotPunchOutTemplate(),
+            ]
+        );
+
+        EmailTemplate::updateOrCreate(
             ['slug' => 'new-message'],
             [
                 'name' => 'New Message (Offline)',
@@ -59,7 +77,7 @@ class EmailTemplateSeeder extends Seeder
 <table role="presentation" cellpadding="0" cellspacing="0">
 <tr>
 <td style="vertical-align:middle;">
-<img src="https://pitchflow.devifyo.cloud/logo.svg" width="32" height="32" alt="PitchFlow" style="display:block;border:0;" />
+<img src="https://pitchflow.devifyo.cloud/email-logo.png" width="32" height="32" alt="PitchFlow" style="display:block;border:0;" />
 </td>
 <td style="padding-left:8px;font-size:18px;font-weight:700;color:#f1f5f9;">
 {{app_name}}
@@ -163,7 +181,7 @@ HTML;
 <table role="presentation" cellpadding="0" cellspacing="0">
 <tr>
 <td style="vertical-align:middle;">
-<img src="https://pitchflow.devifyo.cloud/logo.svg" width="32" height="32" alt="PitchFlow" style="display:block;border:0;" />
+<img src="https://pitchflow.devifyo.cloud/email-logo.png" width="32" height="32" alt="PitchFlow" style="display:block;border:0;" />
 </td>
 <td style="padding-left:8px;font-size:18px;font-weight:700;color:#f1f5f9;">
 {{app_name}}
@@ -270,7 +288,7 @@ HTML;
 <table role="presentation" cellpadding="0" cellspacing="0">
 <tr>
 <td style="vertical-align:middle;">
-<img src="https://pitchflow.devifyo.cloud/logo.svg" width="36" height="36" alt="PitchFlow" style="display:block;border:0;border-radius:8px;" />
+<img src="https://pitchflow.devifyo.cloud/email-logo.png" width="36" height="36" alt="PitchFlow" style="display:block;border:0;border-radius:8px;" />
 </td>
 <td style="padding-left:10px;font-size:20px;font-weight:700;color:#f1f5f9;">
 {{app_name}}
@@ -327,6 +345,216 @@ If the button above doesn't work, copy and paste this link into your browser:
 <td align="center" style="padding-top:32px;">
 <p style="margin:0;font-size:12px;color:#475569;line-height:1.6;">
 &copy; {{year}} {{app_name}}. All rights reserved.
+</p>
+</td>
+</tr>
+
+</table>
+</td>
+</tr>
+</table>
+</body>
+</html>
+HTML;
+    }
+
+    private function punchNotMarkedTemplate(): string
+    {
+        return <<<'HTML'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Punch not marked</title>
+</head>
+<body style="margin:0;padding:0;background-color:#020617;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#020617;padding:40px 20px;">
+<tr>
+<td align="center">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;margin:0 auto;">
+
+<!-- Logo -->
+<tr>
+<td align="center" style="padding-bottom:24px;">
+<table role="presentation" cellpadding="0" cellspacing="0">
+<tr>
+<td style="vertical-align:middle;">
+<img src="https://pitchflow.devifyo.cloud/email-logo.png" width="32" height="32" alt="PitchFlow" style="display:block;border:0;" />
+</td>
+<td style="padding-left:8px;font-size:18px;font-weight:700;color:#f1f5f9;">
+{{app_name}}
+</td>
+</tr>
+</table>
+</td>
+</tr>
+
+<!-- Card -->
+<tr>
+<td style="background-color:#1e293b;border:1px solid #334155;border-radius:12px;padding:36px 32px;">
+
+<!-- Badge -->
+<table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 16px;">
+<tr>
+<td style="background-color:rgba(245,158,11,0.15);border:1px solid rgba(245,158,11,0.4);border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700;letter-spacing:0.5px;color:#fbbf24;text-transform:uppercase;">
+Action needed
+</td>
+</tr>
+</table>
+
+<!-- Heading -->
+<h1 style="margin:0 0 6px;font-size:20px;font-weight:700;color:#f1f5f9;">
+Your {{punch_label}} was not marked
+</h1>
+<p style="margin:0 0 24px;font-size:14px;color:#94a3b8;line-height:1.5;">
+Hi {{user_name}}, unfortunately your {{punch_label}} was not recorded because the confirmation step was not completed.
+</p>
+
+<!-- Body -->
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 24px;">
+<tr>
+<td style="background-color:#0f172a;border:1px solid #334155;border-radius:10px;padding:18px 20px;">
+<p style="margin:0;font-size:14px;color:#e2e8f0;line-height:1.6;">
+Please {{punch_label}} again and press <strong style="color:#f1f5f9;">Confirm &amp; close</strong> at the end to complete your attendance for today.
+</p>
+</td>
+</tr>
+</table>
+
+<!-- Button -->
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+<tr>
+<td align="center">
+<table role="presentation" cellpadding="0" cellspacing="0">
+<tr>
+<td align="center" style="background-color:#84cc16;border-radius:8px;">
+<a href="{{app_url}}/dashboard" target="_blank" style="display:inline-block;padding:12px 28px;font-size:14px;font-weight:600;color:#020617;text-decoration:none;border-radius:8px;">
+{{punch_label_title}} Now
+</a>
+</td>
+</tr>
+</table>
+</td>
+</tr>
+</table>
+
+</td>
+</tr>
+
+<!-- Footer -->
+<tr>
+<td align="center" style="padding-top:24px;">
+<p style="margin:0;font-size:12px;color:#64748b;line-height:1.5;">
+You received this because a {{punch_label}} attempt on your account was not confirmed.<br>This is an automated email. Please do not reply to it.
+</p>
+<p style="margin:6px 0 0;font-size:12px;color:#64748b;">
+&copy; {{year}} {{app_name}}
+</p>
+</td>
+</tr>
+
+</table>
+</td>
+</tr>
+</table>
+</body>
+</html>
+HTML;
+    }
+
+    private function forgotPunchOutTemplate(): string
+    {
+        return <<<'HTML'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Still punched in</title>
+</head>
+<body style="margin:0;padding:0;background-color:#020617;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#020617;padding:40px 20px;">
+<tr>
+<td align="center">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;margin:0 auto;">
+
+<!-- Logo -->
+<tr>
+<td align="center" style="padding-bottom:24px;">
+<table role="presentation" cellpadding="0" cellspacing="0">
+<tr>
+<td style="vertical-align:middle;">
+<img src="https://pitchflow.devifyo.cloud/email-logo.png" width="32" height="32" alt="PitchFlow" style="display:block;border:0;" />
+</td>
+<td style="padding-left:8px;font-size:18px;font-weight:700;color:#f1f5f9;">
+{{app_name}}
+</td>
+</tr>
+</table>
+</td>
+</tr>
+
+<!-- Card -->
+<tr>
+<td style="background-color:#1e293b;border:1px solid #334155;border-radius:12px;padding:36px 32px;">
+
+<!-- Badge -->
+<table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 16px;">
+<tr>
+<td style="background-color:rgba(245,158,11,0.15);border:1px solid rgba(245,158,11,0.4);border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700;letter-spacing:0.5px;color:#fbbf24;text-transform:uppercase;">
+Action needed
+</td>
+</tr>
+</table>
+
+<!-- Heading -->
+<h1 style="margin:0 0 6px;font-size:20px;font-weight:700;color:#f1f5f9;">
+You are still punched in
+</h1>
+<p style="margin:0 0 24px;font-size:14px;color:#94a3b8;line-height:1.5;">
+Hi {{user_name}}, your session that started at {{punch_in_time}} was never punched out.
+</p>
+
+<!-- Body -->
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 24px;">
+<tr>
+<td style="background-color:#0f172a;border:1px solid #334155;border-radius:10px;padding:18px 20px;">
+<p style="margin:0;font-size:14px;color:#e2e8f0;line-height:1.6;">
+Please punch out now so your attendance is recorded correctly. If you forgot to punch out, let your admin know the correct time.
+</p>
+</td>
+</tr>
+</table>
+
+<!-- Button -->
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+<tr>
+<td align="center">
+<table role="presentation" cellpadding="0" cellspacing="0">
+<tr>
+<td align="center" style="background-color:#84cc16;border-radius:8px;">
+<a href="{{app_url}}/dashboard" target="_blank" style="display:inline-block;padding:12px 28px;font-size:14px;font-weight:600;color:#020617;text-decoration:none;border-radius:8px;">
+Punch Out Now
+</a>
+</td>
+</tr>
+</table>
+</td>
+</tr>
+</table>
+
+</td>
+</tr>
+
+<!-- Footer -->
+<tr>
+<td align="center" style="padding-top:24px;">
+<p style="margin:0;font-size:12px;color:#64748b;line-height:1.5;">
+You received this because a session on your account was left open past the end of the day.<br>This is an automated email. Please do not reply to it.
+</p>
+<p style="margin:6px 0 0;font-size:12px;color:#64748b;">
+&copy; {{year}} {{app_name}}
 </p>
 </td>
 </tr>

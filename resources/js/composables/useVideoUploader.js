@@ -265,7 +265,7 @@ export function useVideoUploader(ownerId = null) {
     }
 
     async function queueUpload(blob, type, timeLogId, verified = true, location = null) {
-        if (!blob || blob.size < MIN_BLOB_BYTES) return;
+        if (!blob || blob.size < MIN_BLOB_BYTES) return null;
 
         // Count it as in flight immediately (before any await) so a waitForUploads() started
         // right after this call sees it.
@@ -291,6 +291,7 @@ export function useVideoUploader(ownerId = null) {
         } catch {
             activeUploads.value--;
         }
+        return uploadId;
     }
 
     onUnmounted(() => {

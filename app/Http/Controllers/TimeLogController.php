@@ -6,6 +6,7 @@ use Illuminate\Http\Request;
 use App\Models\AttendanceOverride;
 use App\Models\TimeLog;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\Cache;
 
 class TimeLogController extends Controller
 {
@@ -24,6 +25,8 @@ class TimeLogController extends Controller
         if ($activeShift) {
             return response()->json(['error' => 'Already punched in.'], 400);
         }
+
+        if ($denied = $this->requireFaceVerification()) return $denied;
 
         $now = Carbon::now('UTC');
 
@@ -66,6 +69,8 @@ class TimeLogController extends Controller
             return response()->json(['error' => 'No active shift found.'], 400);
         }
 
+        if ($denied = $this->requireFaceVerification()) return $denied;
+
         $now = Carbon::now('UTC');
         $totalHours = abs($now->floatDiffInHours($log->login_time));
 
@@ -87,6 +92,24 @@ class TimeLogController extends Controller
         ]);
     }
 
+    /**
+     * When face recognition applies to this member, a punch is only accepted within a short window
+     * after a successful face verification, and each verification is good for one punch.
+     */
+    private function requireFaceVerification()
+    {
+        $user = auth()->user();
+        $tenant = \App\Models\Tenant::find($user->tenant_id);
+        $faceApplies = (bool) $tenant?->face_recognition_enabled && !$user->face_exempt && !is_null($user->face_enrolled_at);
+        if (!$faceApplies) return null;
+
+        $key = FaceRecognitionController::verifiedCacheKey($user->id);
+        if (!Cache::pull($key)) {
+            return response()->json(['error' => 'Face verification expired. Please verify your face again.'], 422);
+        }
+        return null;
+    }
+
     public function status()
     {
         $activeShift = TimeLog::where('user_id', auth()->id())
@@ -96,18 +119,14 @@ class TimeLogController extends Controller
 
         $now = Carbon::now('UTC');
 
+        $attendanceDay = TimeLog::attendanceDate($now);
         $todayLogs = TimeLog::where('user_id', auth()->id())
-            ->where('date', TimeLog::attendanceDate($now))
+            ->where('date', $attendanceDay)
             ->get();
-
-        $todayHours = 0.0;
-        foreach ($todayLogs as $log) {
-            if ($log->logout_time) {
-                $todayHours += abs((float) $log->total_hours);
-            } else {
-                $todayHours += abs($now->floatDiffInHours($log->login_time));
-            }
-        }
+        $todayOverride = AttendanceOverride::where('user_id', auth()->id())
+            ->where('date', $attendanceDay)
+            ->first();
+        $todayHours = TimeLog::dayHours($todayLogs, $todayOverride, $now);
 
         return response()->json([
             'is_punched_in' => (bool) $activeShift,
@@ -161,19 +180,7 @@ class TimeLogController extends Controller
 
             $override = $overrides->get($dateKey);
             $dayLogs = $grouped->get($dateKey, collect());
-            $dayHours = 0.0;
-
-            foreach ($dayLogs as $log) {
-                if ($log->logout_time) {
-                    $dayHours += abs((float) $log->total_hours);
-                } elseif ($d->eq($today)) {
-                    $dayHours += abs(Carbon::now('UTC')->floatDiffInHours($log->login_time));
-                }
-            }
-
-            if ($override && $override->manual_hours !== null) {
-                $dayHours = (float) $override->manual_hours;
-            }
+            $dayHours = TimeLog::dayHours($dayLogs, $override);
 
             $dayHours = round($dayHours, 2);
 

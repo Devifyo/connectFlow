@@ -122,6 +122,7 @@ class FaceRecognitionController extends Controller
                 }
 
                 if ($prediction['userid'] === $expectedUserId && $prediction['confidence'] >= $minConfidence) {
+                    $this->rememberVerified($user->id);
                     return response()->json([
                         'verified' => true,
                         'confidence' => round($prediction['confidence'], 4),
@@ -141,6 +142,7 @@ class FaceRecognitionController extends Controller
         // (user is already authenticated — this confirms a real person is present)
         if ($bestMatchUserId && $bestConfidence >= 0.60) {
             Log::info("Face verify: user {$user->id} matched as {$bestMatchUserId} (conf: {$bestConfidence})");
+            $this->rememberVerified($user->id);
             return response()->json([
                 'verified' => true,
                 'confidence' => round($bestConfidence, 4),
@@ -162,6 +164,22 @@ class FaceRecognitionController extends Controller
             'verified' => false,
             'error' => 'Face not recognized. Please re-enroll your face from Profile settings.',
         ]);
+    }
+
+    public const VERIFIED_TTL_SECONDS = 1800;
+
+    public static function verifiedCacheKey(int $userId): string
+    {
+        return "face-verified:{$userId}";
+    }
+
+    /**
+     * A successful verification unlocks one punch in / out for a short window. The punch itself is
+     * recorded only when the member presses "Confirm & close" (see TimeLogController).
+     */
+    private function rememberVerified(int $userId): void
+    {
+        \Illuminate\Support\Facades\Cache::put(self::verifiedCacheKey($userId), now()->timestamp, self::VERIFIED_TTL_SECONDS);
     }
 
     /**
@@ -843,6 +861,39 @@ class FaceRecognitionController extends Controller
      * Diagnostics from the punch camera flow on the employee's device (recorder errors, clip sizes,
      * timings). Phones cannot be debugged remotely otherwise. Fire-and-forget from the client.
      */
+    /**
+     * Links an already-uploaded punch recording to the punch that was recorded after it finished.
+     * The punch is only written once the recording is safely on the server, so the recording is
+     * uploaded first (unlinked = "failed attempt" in admin) and attached here on success.
+     */
+    public function attachPunch(Request $request)
+    {
+        $request->validate([
+            'upload_ids' => 'required|array|min:1|max:5',
+            'upload_ids.*' => 'required|string|max:100',
+            'time_log_id' => 'required|integer',
+        ]);
+
+        $user = auth()->user();
+        $log = \App\Models\TimeLog::where('log_id', $request->time_log_id)->where('user_id', $user->id)->first();
+        if (!$log) {
+            return response()->json(['error' => 'Punch not found.'], 404);
+        }
+
+        $dir = "face-videos/{$user->tenant_id}/{$user->id}";
+        $attached = 0;
+        foreach ($request->upload_ids as $raw) {
+            $uploadId = preg_replace('/[^a-zA-Z0-9_\-]/', '', $raw);
+            if ($uploadId === '') continue;
+            $attached += FaceVideo::where('user_id', $user->id)
+                ->where('file_path', 'like', "{$dir}/{$uploadId}.%")
+                ->whereNull('time_log_id')
+                ->update(['time_log_id' => $log->log_id, 'verified' => true]);
+        }
+
+        return response()->json(['status' => 'ok', 'attached' => $attached]);
+    }
+
     public function clientLog(Request $request)
     {
         $request->validate([

@@ -26,15 +26,16 @@ class TenantAdminController extends Controller
                     ->latest('login_time')
                     ->first();
 
-                $todayHours = TimeLog::where('user_id', $bidder->id)
-                    ->where('date', $now->toDateString())
-                    ->get()
-                    ->sum(function ($log) use ($now) {
-                        if ($log->logout_time) {
-                            return abs((float) $log->total_hours);
-                        }
-                        return abs($now->floatDiffInHours($log->login_time));
-                    });
+                // Attendance day in IST with the 3 AM rollover, matching the attendance calendar.
+                $attendanceDay = TimeLog::attendanceDate($now);
+
+                $todayLogs = TimeLog::where('user_id', $bidder->id)
+                    ->where('date', $attendanceDay)
+                    ->get();
+                $todayOverride = AttendanceOverride::where('user_id', $bidder->id)
+                    ->where('date', $attendanceDay)
+                    ->first();
+                $todayHours = TimeLog::dayHours($todayLogs, $todayOverride, $now);
 
                 $bidsToday = Bid::where('user_id', $bidder->id)
                     ->whereDate('created_at', $now->toDateString())
@@ -55,11 +56,15 @@ class TenantAdminController extends Controller
                     'joining_date' => $bidder->joining_date,
                     'salary' => $bidder->salary ? (float) $bidder->salary : null,
                     'min_hours_per_day' => (float) $bidder->min_hours_per_day,
+                    'min_punch_recording_seconds' => (int) $bidder->min_punch_recording_seconds,
                     'total_bids' => $bidder->bids_count,
                     'bids_today' => $bidsToday,
                     'bids_this_week' => $bidsThisWeek,
                     'is_online' => (bool) $activeShift,
                     'punched_in_at' => $activeShift?->login_time?->toIso8601String(),
+                    // App activity, separate from the punch: when they last actually used PitchFlow.
+                    'presence' => $bidder->livePresence(),
+                    'last_active_at' => $bidder->last_active_at?->toIso8601String(),
                     'today_hours' => round($todayHours, 2),
                     'joined' => $bidder->created_at?->toIso8601String(),
                     'face_enrolled_at' => $bidder->face_enrolled_at,
@@ -80,6 +85,7 @@ class TenantAdminController extends Controller
             'joining_date' => 'required|date',
             'salary' => 'required|numeric|min:0',
             'min_hours_per_day' => 'required|numeric|min:1|max:24',
+            'min_punch_recording_seconds' => 'sometimes|integer|min:0|max:600',
         ]);
 
         $tenantId = auth()->user()->tenant_id;
@@ -110,6 +116,7 @@ class TenantAdminController extends Controller
             'joining_date' => $request->joining_date,
             'salary' => $request->salary,
             'min_hours_per_day' => $request->min_hours_per_day,
+            'min_punch_recording_seconds' => (int) ($request->min_punch_recording_seconds ?? 0),
         ]);
         $user->positions()->attach($request->position_ids);
         $user->assignRole('Bidder');
@@ -135,6 +142,7 @@ class TenantAdminController extends Controller
             'is_active' => 'sometimes|boolean',
             'salary' => 'sometimes|numeric|min:0',
             'min_hours_per_day' => 'sometimes|numeric|min:1|max:24',
+            'min_punch_recording_seconds' => 'sometimes|integer|min:0|max:600',
             'notification_email' => 'sometimes|nullable|email',
         ]);
 
@@ -146,7 +154,7 @@ class TenantAdminController extends Controller
             $user->designation = $positions->join(', ');
         }
 
-        $fields = ['is_active', 'salary', 'min_hours_per_day', 'notification_email'];
+        $fields = ['is_active', 'salary', 'min_hours_per_day', 'min_punch_recording_seconds', 'notification_email'];
         foreach ($fields as $field) {
             if ($request->has($field)) {
                 $user->$field = $request->$field;
@@ -314,6 +322,7 @@ class TenantAdminController extends Controller
                 'joining_date' => $user->joining_date,
                 'salary' => $user->salary ? (float) $user->salary : null,
                 'min_hours_per_day' => (float) $user->min_hours_per_day,
+                'min_punch_recording_seconds' => (int) $user->min_punch_recording_seconds,
                 'is_active' => $user->is_active,
                 'created_at' => $user->created_at?->toIso8601String(),
             ],
@@ -418,19 +427,7 @@ class TenantAdminController extends Controller
 
             $override = $overrides->get($dateKey);
             $dayLogs = $grouped->get($dateKey, collect());
-            $dayHours = 0.0;
-
-            foreach ($dayLogs as $log) {
-                if ($log->logout_time) {
-                    $dayHours += abs((float) $log->total_hours);
-                } elseif ($d->eq($today)) {
-                    $dayHours += abs(Carbon::now('UTC')->floatDiffInHours($log->login_time));
-                }
-            }
-
-            if ($override && $override->manual_hours !== null) {
-                $dayHours = (float) $override->manual_hours;
-            }
+            $dayHours = TimeLog::dayHours($dayLogs, $override);
 
             $dayHours = round($dayHours, 2);
 

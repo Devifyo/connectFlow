@@ -258,6 +258,7 @@ function openEditMember(bidder) {
         position_ids: (bidder.positions || []).map(p => p.id),
         salary: bidder.salary || '',
         min_hours_per_day: bidder.min_hours_per_day || '8',
+        min_punch_recording_seconds: bidder.min_punch_recording_seconds ?? 0,
     };
     editErrors.value = {};
 }
@@ -274,6 +275,8 @@ async function saveEditMember() {
     if (isNaN(salaryNum) || salaryNum <= 0) errors.salary = 'Salary must be > 0';
     const hoursNum = Number(editForm.value.min_hours_per_day);
     if (isNaN(hoursNum) || hoursNum < 1 || hoursNum > 24) errors.min_hours_per_day = '1-24 hours';
+    const recSec = Number(editForm.value.min_punch_recording_seconds);
+    if (isNaN(recSec) || recSec < 0 || recSec > 600) errors.min_punch_recording_seconds = '0-600 seconds';
     editErrors.value = errors;
     if (Object.keys(errors).length > 0) return;
 
@@ -283,6 +286,7 @@ async function saveEditMember() {
             position_ids: editForm.value.position_ids.map(Number),
             salary: Number(editForm.value.salary),
             min_hours_per_day: Number(editForm.value.min_hours_per_day),
+            min_punch_recording_seconds: Math.round(Number(editForm.value.min_punch_recording_seconds) || 0),
         });
         closeEditMember();
         await fetchTeamData();
@@ -296,7 +300,13 @@ const memberAttLoading = ref(false);
 const attYear = ref(new Date().getFullYear());
 const attMonth = ref(new Date().getMonth() + 1);
 const dayEditOpen = ref(null);
-const dayEditForm = ref({ status: 'present', manual_hours: '', note: '', show_status_to_member: false, show_note_to_member: false });
+const dayEditForm = ref({ status: 'present', manual_h: '', manual_m: '', note: '', show_status_to_member: false, show_note_to_member: false });
+
+function splitHours(h) {
+    if (h === null || h === undefined || h === '') return { manual_h: '', manual_m: '' };
+    const total = Math.round(Math.abs(Number(h)) * 60);
+    return { manual_h: Math.floor(total / 60), manual_m: total % 60 };
+}
 const dayEditLoading = ref(false);
 const adminPunchMode = ref(null);
 const adminPunchTime = ref('09:00');
@@ -333,6 +343,41 @@ const adminPunchPreview = computed(() => {
     const d = new Date(Date.UTC(2000, 0, 1, h, m));
     return `${d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })} IST on ${dayEditOpen.value}`;
 });
+
+// "Activity" column: live app presence (same rule as chat) and last-seen time.
+const presenceTick = ref(Date.now());
+function presenceOf(bidder) {
+    if (!bidder.last_active_at) return 'offline';
+    const age = presenceTick.value - new Date(bidder.last_active_at).getTime();
+    if (bidder.presence === 'online' && age <= 45000) return 'online';
+    if (bidder.presence === 'away' && age <= 90000) return 'away';
+    return 'offline';
+}
+function lastSeenText(bidder) {
+    const p = presenceOf(bidder);
+    if (p === 'online') return 'Active now';
+    if (p === 'away') return 'Away';
+    if (!bidder.last_active_at) return 'Never active';
+    const mins = Math.floor((presenceTick.value - new Date(bidder.last_active_at).getTime()) / 60000);
+    if (mins < 1) return 'Just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    const days = Math.floor(hrs / 24);
+    if (days < 7) return `${days}d ago`;
+    return new Date(bidder.last_active_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+}
+let teamRefreshTimer = null;
+function startTeamRefresh() {
+    stopTeamRefresh();
+    teamRefreshTimer = setInterval(() => {
+        presenceTick.value = Date.now();
+        if (activeTab.value === 'team' && !document.hidden) fetchTeamData();
+    }, 30000);
+}
+function stopTeamRefresh() {
+    if (teamRefreshTimer) { clearInterval(teamRefreshTimer); teamRefreshTimer = null; }
+}
 
 function formatHours(h) {
     if (!h || h === 0) return '0h 0m';
@@ -589,7 +634,7 @@ function openDayEdit(day) {
     dayEditOpen.value = day.date;
     dayEditForm.value = {
         status: day.override?.status || day.status || 'present',
-        manual_hours: day.override?.hours ?? (day.hours || ''),
+        ...splitHours(day.override?.hours ?? (day.hours || '')),
         note: day.override?.note || '',
         show_status_to_member: day.override?.show_status_to_member || false,
         show_note_to_member: day.override?.show_note_to_member || false,
@@ -602,7 +647,9 @@ async function saveDayEdit() {
         await axios.put(`/api/admin/bidders/${viewMember.value.id}/attendance`, {
             date: dayEditOpen.value,
             status: dayEditForm.value.status,
-            manual_hours: dayEditForm.value.manual_hours !== '' ? Number(dayEditForm.value.manual_hours) : null,
+            manual_hours: (dayEditForm.value.manual_h !== '' || dayEditForm.value.manual_m !== '')
+                ? Math.round(((Number(dayEditForm.value.manual_h) || 0) + (Number(dayEditForm.value.manual_m) || 0) / 60) * 10000) / 10000
+                : null,
             note: dayEditForm.value.note || null,
             show_status_to_member: dayEditForm.value.show_status_to_member,
             show_note_to_member: dayEditForm.value.show_note_to_member,
@@ -1227,6 +1274,7 @@ async function savePassword() {
 }
 
 onMounted(async () => {
+    startTeamRefresh();
     fetchSiteStatus();
     ready.value = true;
     loadSettingsForm();
@@ -1263,6 +1311,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+    stopTeamRefresh();
     stopVideoPoll();
     if (props.auth.user?.id && window.Echo) {
         window.Echo.leaveChannel(`private-messages.${props.auth.user.id}`);
@@ -1715,6 +1764,17 @@ onUnmounted(() => {
                                         </div>
                                         <p v-if="editErrors.min_hours_per_day" class="text-[11px] text-red-400 mt-1">{{ editErrors.min_hours_per_day }}</p>
                                     </div>
+                                    <!-- Minimum punch recording -->
+                                    <div class="col-span-2">
+                                        <label class="block text-xs font-medium text-surface-400 mb-1.5">Minimum punch recording</label>
+                                        <div class="relative">
+                                            <input v-model="editForm.min_punch_recording_seconds" type="number" inputmode="numeric" min="0" max="600" step="5"
+                                                class="input-field w-full pr-12" :class="{ 'border-red-500/50': editErrors.min_punch_recording_seconds }" />
+                                            <span class="absolute right-3 top-1/2 -translate-y-1/2 text-surface-500 text-xs">sec</span>
+                                        </div>
+                                        <p v-if="editErrors.min_punch_recording_seconds" class="text-[11px] text-red-400 mt-1">{{ editErrors.min_punch_recording_seconds }}</p>
+                                        <p v-else class="text-[11px] text-surface-500 mt-1">Each punch in / out video records for at least this long before the confirmation can close. 0 = no minimum. The member is not told about it.</p>
+                                    </div>
                                 </div>
                                 <!-- Info row -->
                                 <div class="rounded-lg bg-surface-800/40 border border-surface-700/20 p-3 grid grid-cols-2 gap-3 text-xs">
@@ -2059,9 +2119,15 @@ onUnmounted(() => {
                                                     </select>
                                                 </div>
                                                 <div>
-                                                    <label class="block text-[10px] font-medium text-surface-500 mb-1">Manual Hours</label>
-                                                    <input v-model="dayEditForm.manual_hours" type="number" min="0" max="24" step="0.5"
-                                                        class="input-field w-full text-xs" placeholder="Auto" />
+                                                    <label class="block text-[10px] font-medium text-surface-500 mb-1">Worked time</label>
+                                                    <div class="flex items-center gap-1.5">
+                                                        <input v-model="dayEditForm.manual_h" type="number" inputmode="numeric" min="0" max="24" step="1"
+                                                            class="input-field w-full text-xs" placeholder="hrs" />
+                                                        <span class="text-[11px] text-surface-500">h</span>
+                                                        <input v-model="dayEditForm.manual_m" type="number" inputmode="numeric" min="0" max="59" step="1"
+                                                            class="input-field w-full text-xs" placeholder="min" />
+                                                        <span class="text-[11px] text-surface-500">m</span>
+                                                    </div>
                                                 </div>
                                                 <div>
                                                     <label class="block text-[10px] font-medium text-surface-500 mb-1">Note</label>
@@ -2409,7 +2475,8 @@ onUnmounted(() => {
                                     <th class="px-4 py-3 text-left table-header">Emp ID</th>
                                     <th class="px-4 py-3 text-left table-header">Member</th>
                                     <th class="px-4 py-3 text-left table-header">Position</th>
-                                    <th class="px-4 py-3 text-left table-header">Status</th>
+                                    <th class="px-4 py-3 text-left table-header">Punch</th>
+                                    <th class="px-4 py-3 text-left table-header">Activity</th>
                                     <th class="px-4 py-3 text-center table-header">Salary</th>
                                     <th class="px-4 py-3 text-center table-header">Min Hrs</th>
                                     <th class="px-4 py-3 text-center table-header">Today</th>
@@ -2433,7 +2500,7 @@ onUnmounted(() => {
                                                     :class="getUserColor(bidder.name)">
                                                     {{ bidder.name.charAt(0).toUpperCase() }}
                                                 </div>
-                                                <div v-if="bidder.is_online" class="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-emerald-400 border-2 border-surface-900"></div>
+                                                <div v-if="presenceOf(bidder) !== 'offline'" class="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-surface-900" :class="presenceOf(bidder) === 'online' ? 'bg-emerald-400' : 'bg-amber-400'"></div>
                                             </div>
                                             <div>
                                                 <p class="font-medium text-surface-200 text-sm">{{ bidder.name }}</p>
@@ -2456,8 +2523,15 @@ onUnmounted(() => {
                                     </td>
                                     <td class="px-4 py-4">
                                         <span v-if="!bidder.is_active" class="badge-danger">Disabled</span>
-                                        <span v-else-if="bidder.is_online" class="badge-success">Online</span>
-                                        <span v-else class="badge-neutral">Offline</span>
+                                        <span v-else-if="bidder.is_online" class="badge-success">Punched in</span>
+                                        <span v-else class="badge-neutral">Punched out</span>
+                                    </td>
+                                    <td class="px-4 py-4">
+                                        <div class="flex items-center gap-2 text-xs" :title="bidder.last_active_at ? 'Last active ' + new Date(bidder.last_active_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) : 'No app activity yet'">
+                                            <span class="w-2 h-2 rounded-full flex-shrink-0"
+                                                :class="presenceOf(bidder) === 'online' ? 'bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.8)]' : (presenceOf(bidder) === 'away' ? 'bg-amber-400' : 'bg-surface-600')"></span>
+                                            <span :class="presenceOf(bidder) === 'online' ? 'text-emerald-300' : (presenceOf(bidder) === 'away' ? 'text-amber-300' : 'text-surface-400')">{{ lastSeenText(bidder) }}</span>
+                                        </div>
                                     </td>
                                     <td class="px-4 py-4 text-center text-xs font-mono text-surface-300">{{ formatSalary(bidder.salary) }}</td>
                                     <td class="px-4 py-4 text-center text-xs font-mono text-surface-300">{{ bidder.min_hours_per_day }}h</td>
