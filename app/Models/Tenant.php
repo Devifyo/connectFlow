@@ -14,6 +14,8 @@ class Tenant extends Model
         'face_recognition_enabled' => 'boolean',
         'maintenance_enabled' => 'boolean',
         'maintenance_started_at' => 'datetime',
+        'activity_checks_enabled' => 'boolean',
+        'activity_reverify_enabled' => 'boolean',
     ];
 
     /** Payload shown to members while the site is down, or null when it is up. */

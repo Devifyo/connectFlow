@@ -316,6 +316,47 @@ async function fetchTimeStatus() {
     } catch (e) {}
 }
 
+// ---- Silent activity reporting ----
+// While punched in, the app tells the server every 30 seconds how long ago the last real input
+// (touch / keyboard / mouse / scroll) happened. The server runs random activity checks and punches
+// the member out automatically if there has been no input for too long. Nothing is shown here.
+let activityPingTimer = null;
+let lastInputAt = null;
+
+function noteInput() { lastInputAt = Date.now(); }
+
+async function sendActivityPing() {
+    if (!isPunchedIn.value) return;
+    try {
+        const params = lastInputAt ? { idle_seconds: Math.floor((Date.now() - lastInputAt) / 1000) } : {};
+        const { data } = await axios.post('/api/activity/ping', params);
+        if (data.punched_in === false && isPunchedIn.value) {
+            // Session was closed on the server (automatic punch-out or by an admin).
+            isPunchedIn.value = false;
+            punchedInAt.value = null;
+            stopClock();
+            elapsedSeconds.value = 0;
+            fetchTimeStatus();
+        }
+    } catch {}
+}
+
+function onActivityVisibility() {
+    if (!document.hidden) sendActivityPing();
+}
+
+function startActivityReporting() {
+    ['mousemove', 'keydown', 'touchstart', 'scroll', 'click'].forEach(e => document.addEventListener(e, noteInput, { passive: true }));
+    document.addEventListener('visibilitychange', onActivityVisibility);
+    activityPingTimer = setInterval(sendActivityPing, 30000);
+}
+
+function stopActivityReporting() {
+    ['mousemove', 'keydown', 'touchstart', 'scroll', 'click'].forEach(e => document.removeEventListener(e, noteInput));
+    document.removeEventListener('visibilitychange', onActivityVisibility);
+    if (activityPingTimer) clearInterval(activityPingTimer);
+}
+
 function openPunchModal() {
     if (faceEnabled.value && !faceEnrolled.value) return;
     punchLocation.value = null;
@@ -1353,6 +1394,7 @@ async function savePassword() {
 
 // --- Lifecycle ---
 onMounted(() => {
+    startActivityReporting();
     fetchTimeStatus();
     fetchBids();
     fetchProfile();
@@ -1404,6 +1446,7 @@ window.addEventListener('beforeunload', handleBeforeUnload);
 document.addEventListener('visibilitychange', handleVisibilityChange);
 
 onUnmounted(() => {
+    stopActivityReporting();
     stopClock();
     stopBackgroundRecording();
     stopFaceMetrics();

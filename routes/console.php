@@ -15,5 +15,8 @@ Schedule::command('attendance:remind-open-sessions')
     ->timezone(config('attendance.timezone', 'Asia/Kolkata'))
     ->withoutOverlapping();
 
+// "Are you active?" checks: expire unanswered ones (auto punch-out), detect inactivity, top up.
+Schedule::command('attendance:process-activity-checks')->everyMinute()->withoutOverlapping();
+
 // Complete uploads abandoned by a phone (locked screen, closed tab) so admin sees them promptly.
 Schedule::command('face-videos:finalize-stale')->everyTenMinutes()->withoutOverlapping();

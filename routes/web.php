@@ -66,6 +66,7 @@ Route::middleware('auth')->group(function () {
     Route::post('/api/time/punch-out', [\App\Http\Controllers\TimeLogController::class, 'punchOut']);
     Route::get('/api/time/status', [\App\Http\Controllers\TimeLogController::class, 'status']);
     Route::get('/api/time/attendance', [\App\Http\Controllers\TimeLogController::class, 'attendance']);
+    Route::post('/api/activity/ping', [\App\Http\Controllers\ActivityCheckController::class, 'ping']);
 
     // Tenant Admin Routes
     Route::middleware('role:TenantAdmin|SuperAdmin')->group(function () {
@@ -90,6 +91,8 @@ Route::middleware('auth')->group(function () {
         Route::put('/api/admin/notification-email', [\App\Http\Controllers\TenantAdminController::class, 'updateNotificationEmail']);
         Route::get('/api/admin/site-status', [\App\Http\Controllers\TenantAdminController::class, 'siteStatus']);
         Route::post('/api/admin/site-status', [\App\Http\Controllers\TenantAdminController::class, 'updateSiteStatus']);
+        Route::get('/api/admin/activity-checks', [\App\Http\Controllers\TenantAdminController::class, 'activityChecksSetting']);
+        Route::post('/api/admin/activity-checks', [\App\Http\Controllers\TenantAdminController::class, 'updateActivityChecksSetting']);
 
         // Positions
         Route::get('/api/admin/positions', [\App\Http\Controllers\PositionController::class, 'index']);

@@ -137,6 +137,14 @@ function toLocalDate(iso) {
     return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
+function toLocalDateTime(iso) {
+    if (!iso) return '';
+    return new Date(iso).toLocaleString('en-IN', {
+        timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', year: 'numeric',
+        hour: 'numeric', minute: '2-digit', hour12: true,
+    });
+}
+
 function truncateUrl(url, max = 40) {
     if (!url) return '';
     try {
@@ -259,6 +267,8 @@ function openEditMember(bidder) {
         salary: bidder.salary || '',
         min_hours_per_day: bidder.min_hours_per_day || '8',
         min_punch_recording_seconds: bidder.min_punch_recording_seconds ?? 0,
+        activity_checks_enabled: bidder.activity_checks_enabled !== false,
+        activity_reverify_enabled: bidder.activity_reverify_enabled !== false,
     };
     editErrors.value = {};
 }
@@ -287,6 +297,8 @@ async function saveEditMember() {
             salary: Number(editForm.value.salary),
             min_hours_per_day: Number(editForm.value.min_hours_per_day),
             min_punch_recording_seconds: Math.round(Number(editForm.value.min_punch_recording_seconds) || 0),
+            activity_checks_enabled: !!editForm.value.activity_checks_enabled,
+            activity_reverify_enabled: !!editForm.value.activity_reverify_enabled,
         });
         closeEditMember();
         await fetchTeamData();
@@ -1154,6 +1166,20 @@ const settingsForm = ref({
 });
 const settingsSaving = ref(false);
 
+// --- Activity checks (team-wide switch) ---
+const activityChecks = ref({ enabled: true, reverify: true });
+const activityChecksSaving = ref(false);
+async function fetchActivityChecks() {
+    try { const { data } = await axios.get('/api/admin/activity-checks'); activityChecks.value = data; } catch (e) {}
+}
+async function setActivityChecks(enabled, field = 'enabled') {
+    activityChecksSaving.value = true;
+    try {
+        const { data } = await axios.post('/api/admin/activity-checks', { [field]: enabled });
+        activityChecks.value = data;
+    } catch (e) {} finally { activityChecksSaving.value = false; }
+}
+
 // --- Site access (maintenance mode for members) ---
 const siteStatus = ref({ enabled: false, reason: '', since: null, by: null });
 const siteDownReason = ref('');
@@ -1276,6 +1302,7 @@ async function savePassword() {
 onMounted(async () => {
     startTeamRefresh();
     fetchSiteStatus();
+    fetchActivityChecks();
     ready.value = true;
     loadSettingsForm();
     await Promise.all([fetchPipelineData(), fetchTeamData(), fetchAgencyProfile(), fetchPositions()]);
@@ -1577,14 +1604,18 @@ onUnmounted(() => {
             <!-- ========== TEAM TAB ========== -->
             <main v-else-if="activeTab === 'team'" class="flex-1 p-6 overflow-auto" :class="{ 'animate-fade-in': ready }">
                 <!-- Team stats -->
-                <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
+                <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
                     <div class="stat-card">
                         <span class="text-xs font-medium text-surface-400 uppercase tracking-wider">Team Size</span>
                         <span class="text-2xl font-semibold text-surface-100 mt-1">{{ bidders.length }}</span>
                     </div>
-                    <div class="stat-card">
+                    <div class="stat-card" title="Members with an open punch-in session right now">
+                        <span class="text-xs font-medium text-surface-400 uppercase tracking-wider">Punched In</span>
+                        <span class="text-2xl font-semibold text-emerald-400 mt-1">{{ bidders.filter(b => b.is_active && b.is_online).length }}</span>
+                    </div>
+                    <div class="stat-card" title="Members using PitchFlow right now (same as the Activity column)">
                         <span class="text-xs font-medium text-surface-400 uppercase tracking-wider">Online Now</span>
-                        <span class="text-2xl font-semibold text-emerald-400 mt-1">{{ bidders.filter(b => b.is_online).length }}</span>
+                        <span class="text-2xl font-semibold text-sky-400 mt-1">{{ bidders.filter(b => b.is_active && presenceOf(b) === 'online').length }}</span>
                     </div>
                     <div class="stat-card">
                         <span class="text-xs font-medium text-surface-400 uppercase tracking-wider">Bids Today</span>
@@ -1763,6 +1794,28 @@ onUnmounted(() => {
                                             <span class="absolute right-3 top-1/2 -translate-y-1/2 text-surface-500 text-xs">hrs</span>
                                         </div>
                                         <p v-if="editErrors.min_hours_per_day" class="text-[11px] text-red-400 mt-1">{{ editErrors.min_hours_per_day }}</p>
+                                    </div>
+                                    <!-- Activity checks (per member) -->
+                                    <div class="col-span-2 flex items-start justify-between gap-4 rounded-lg bg-surface-800/40 border border-surface-700/20 px-3 py-2.5">
+                                        <div>
+                                            <p class="text-xs font-medium text-surface-300">Activity checks</p>
+                                            <p class="text-[11px] text-surface-500 mt-0.5">Random checks while punched in. If there's no activity for a while, or the app is closed, the member is punched out automatically, and time counts until that punch-out.<span v-if="!activityChecks.enabled" class="text-amber-400"> Currently off for the whole team in Settings.</span></p>
+                                        </div>
+                                        <button type="button" @click="editForm.activity_checks_enabled = !editForm.activity_checks_enabled"
+                                            class="relative w-9 h-5 rounded-full transition-colors flex-shrink-0 mt-0.5" :class="editForm.activity_checks_enabled ? 'bg-brand' : 'bg-surface-700'">
+                                            <span class="absolute left-0 top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform" :class="editForm.activity_checks_enabled ? 'translate-x-4' : 'translate-x-0.5'"></span>
+                                        </button>
+                                    </div>
+                                    <!-- Mandatory re-punch (per member) -->
+                                    <div class="col-span-2 flex items-start justify-between gap-4 rounded-lg bg-surface-800/40 border border-surface-700/20 px-3 py-2.5">
+                                        <div>
+                                            <p class="text-xs font-medium text-surface-300">Punch in again every 45-60 min</p>
+                                            <p class="text-[11px] text-surface-500 mt-0.5">Even when active, the member is punched out at a random moment 45 to 60 minutes after each punch-in and must punch in again with their face.<span v-if="!activityChecks.reverify" class="text-amber-400"> Currently off for the whole team in Settings.</span></p>
+                                        </div>
+                                        <button type="button" @click="editForm.activity_reverify_enabled = !editForm.activity_reverify_enabled"
+                                            class="relative w-9 h-5 rounded-full transition-colors flex-shrink-0 mt-0.5" :class="editForm.activity_reverify_enabled ? 'bg-brand' : 'bg-surface-700'">
+                                            <span class="absolute left-0 top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform" :class="editForm.activity_reverify_enabled ? 'translate-x-4' : 'translate-x-0.5'"></span>
+                                        </button>
                                     </div>
                                     <!-- Minimum punch recording -->
                                     <div class="col-span-2">
@@ -1958,7 +2011,7 @@ onUnmounted(() => {
                                                     class="px-4 py-2.5 border-b border-surface-800/30 last:border-0 flex items-center justify-between hover:bg-surface-800/20 transition-colors">
                                                     <div class="min-w-0 flex-1">
                                                         <p class="text-xs font-medium text-surface-200 truncate">{{ bid.job_title || truncateUrl(bid.job_url) }}</p>
-                                                        <p class="text-[10px] text-surface-500 mt-0.5">{{ bid.platform_name }} &middot; {{ bid.connects_used }} connects &middot; {{ toLocalDate(bid.created_at) }}</p>
+                                                        <p class="text-[10px] text-surface-500 mt-0.5">{{ bid.platform_name }} &middot; {{ bid.connects_used }} connects &middot; {{ toLocalDateTime(bid.created_at) }}</p>
                                                     </div>
                                                     <span class="ml-3 text-[10px] font-medium px-2 py-0.5 rounded-md flex-shrink-0"
                                                         :class="statusColors[bid.status]?.badge || 'bg-surface-700/50 text-surface-400'">
@@ -2231,6 +2284,10 @@ onUnmounted(() => {
                                                             </span>
                                                             <svg class="w-3 h-3 text-surface-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>
                                                             <span class="font-mono" :class="s.out ? 'text-red-400' : 'text-emerald-400'">{{ s.out ? fmtAttendanceTime(s.out) : 'Active' }}</span>
+                                                            <span v-if="s.auto_out" class="ml-1 text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded"
+                                                                :class="s.auto_out === 'reverify' ? 'bg-sky-500/15 text-sky-300' : 'bg-amber-500/15 text-amber-300'"
+                                                                :title="s.auto_out === 'reverify' ? 'Closed for scheduled re-verification (member was active)' : 'Punched out automatically: no activity detected'">{{ s.auto_out === 'reverify' ? 'Re-verify' : 'Auto' }}</span>
+                                                            <span v-if="s.checks && (s.checks.passed || s.checks.missed)" class="ml-1 text-[10px] text-surface-500" :title="`Activity checks: ${s.checks.passed} passed, ${s.checks.missed} missed`">{{ s.checks.passed }}✓<template v-if="s.checks.missed"> {{ s.checks.missed }}✗</template></span>
                                                             <button v-if="getSessionVideos(s).punch_out.length" @click="openSessionVideoPopup(s, 'out')" class="p-0.5 rounded transition-colors" :class="getSessionVideos(s).punch_out.some(v => !v.verified) ? 'text-amber-400/70 hover:text-amber-400' : 'text-red-400/60 hover:text-red-400'" :title="`${getSessionVideos(s).punch_out.length} video(s)`">
                                                                 <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z"/></svg>
                                                             </button>
@@ -3194,6 +3251,30 @@ onUnmounted(() => {
             <!-- ========== SETTINGS TAB ========== -->
             <main v-else-if="activeTab === 'settings'" class="flex-1 p-6 overflow-auto" :class="{ 'animate-fade-in': ready }">
                 <div class="max-w-xl space-y-6">
+                    <!-- Activity checks -->
+                    <div class="card p-6">
+                        <div class="flex items-start justify-between gap-4 mb-1">
+                            <h2 class="text-base font-semibold text-surface-100">Activity Checks</h2>
+                            <button type="button" @click="setActivityChecks(!activityChecks.enabled)" :disabled="activityChecksSaving"
+                                class="relative w-10 h-5 rounded-full transition-colors flex-shrink-0" :class="[activityChecks.enabled ? 'bg-brand' : 'bg-surface-700', activityChecksSaving ? 'opacity-50' : '']">
+                                <span class="absolute left-0 top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform" :class="activityChecks.enabled ? 'translate-x-5' : 'translate-x-0.5'"></span>
+                            </button>
+                        </div>
+                        <p class="text-sm text-surface-400">While a member is punched in, PitchFlow checks for activity at random times they can't predict, at least once per hour of their daily minimum. If there has been no activity for a while, or the app is closed, they are punched out automatically and get an email. Their time counts until that punch-out. Nothing is shown to members.</p>
+                        <p class="text-xs text-surface-500 mt-3">{{ activityChecks.enabled ? 'On for the team. You can switch it off for individual members in Team → Edit.' : 'Off for the whole team.' }}</p>
+
+                        <div class="mt-4 pt-4 border-t border-surface-700/30 flex items-start justify-between gap-4">
+                            <div>
+                                <p class="text-sm font-medium text-surface-200">Punch in again every 45-60 min</p>
+                                <p class="text-xs text-surface-500 mt-0.5">Even when a member is active, their session is closed at a random moment 45 to 60 minutes after each punch-in, so they have to punch in and verify their face again.</p>
+                            </div>
+                            <button type="button" @click="setActivityChecks(!activityChecks.reverify, 'reverify')" :disabled="activityChecksSaving"
+                                class="relative w-10 h-5 rounded-full transition-colors flex-shrink-0" :class="activityChecks.reverify ? 'bg-brand' : 'bg-surface-700'">
+                                <span class="absolute left-0 top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform" :class="activityChecks.reverify ? 'translate-x-5' : 'translate-x-0.5'"></span>
+                            </button>
+                        </div>
+                    </div>
+
                     <!-- Site access / maintenance mode -->
                     <div class="card p-6" :class="siteStatus.enabled ? 'border-red-500/40' : ''">
                         <div class="flex items-start justify-between gap-4 mb-1">

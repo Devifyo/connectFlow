@@ -57,6 +57,8 @@ class TenantAdminController extends Controller
                     'salary' => $bidder->salary ? (float) $bidder->salary : null,
                     'min_hours_per_day' => (float) $bidder->min_hours_per_day,
                     'min_punch_recording_seconds' => (int) $bidder->min_punch_recording_seconds,
+                    'activity_checks_enabled' => (bool) $bidder->activity_checks_enabled,
+                    'activity_reverify_enabled' => (bool) $bidder->activity_reverify_enabled,
                     'total_bids' => $bidder->bids_count,
                     'bids_today' => $bidsToday,
                     'bids_this_week' => $bidsThisWeek,
@@ -143,6 +145,8 @@ class TenantAdminController extends Controller
             'salary' => 'sometimes|numeric|min:0',
             'min_hours_per_day' => 'sometimes|numeric|min:1|max:24',
             'min_punch_recording_seconds' => 'sometimes|integer|min:0|max:600',
+            'activity_checks_enabled' => 'sometimes|boolean',
+            'activity_reverify_enabled' => 'sometimes|boolean',
             'notification_email' => 'sometimes|nullable|email',
         ]);
 
@@ -154,13 +158,42 @@ class TenantAdminController extends Controller
             $user->designation = $positions->join(', ');
         }
 
-        $fields = ['is_active', 'salary', 'min_hours_per_day', 'min_punch_recording_seconds', 'notification_email'];
+        $fields = ['is_active', 'salary', 'min_hours_per_day', 'min_punch_recording_seconds', 'activity_checks_enabled', 'activity_reverify_enabled', 'notification_email'];
         foreach ($fields as $field) {
             if ($request->has($field)) {
                 $user->$field = $request->$field;
             }
         }
         $user->save();
+
+        if ($request->has('activity_reverify_enabled')) {
+            $open = \App\Models\TimeLog::where('user_id', $user->id)->whereNull('logout_time')->first();
+            if ($open) {
+                if (!$request->boolean('activity_reverify_enabled')) {
+                    // Off: the open session is no longer force-closed.
+                    $open->forceFill(['forced_out_at' => null])->saveQuietly();
+                } elseif (!$open->forced_out_at && app(\App\Services\ActivityCheckService::class)->reverifyEnabledFor($user->fresh())) {
+                    // On mid-session: close it at a random 45-60 min from now.
+                    [$lo, $hi] = config('attendance.activity_checks.reverify_after_minutes', [45, 60]);
+                    $open->forceFill(['activity_checks' => true, 'last_activity_at' => $open->last_activity_at ?? now(),
+                        'forced_out_at' => now()->addSeconds(mt_rand($lo * 60, $hi * 60))])->saveQuietly();
+                }
+            }
+        }
+
+        if ($request->has('activity_checks_enabled')) {
+            if (!$request->boolean('activity_checks_enabled')) {
+                // Off: drop any pending checks right away.
+                \App\Models\ActivityCheck::where('user_id', $user->id)->where('status', 'pending')
+                    ->update(['status' => 'cancelled', 'updated_at' => now()]);
+            } else {
+                // On mid-session: start checking the open session now.
+                $open = \App\Models\TimeLog::where('user_id', $user->id)->whereNull('logout_time')->first();
+                if ($open && !\App\Models\ActivityCheck::where('time_log_id', $open->log_id)->where('status', 'pending')->exists()) {
+                    app(\App\Services\ActivityCheckService::class)->scheduleForSession($open);
+                }
+            }
+        }
 
         return response()->json(['status' => 'success']);
     }
@@ -192,6 +225,40 @@ class TenantAdminController extends Controller
             $tenant->tenant_id, $enabled ? 'DOWN' : 'UP', auth()->id(), $enabled ? ': ' . $tenant->maintenance_reason : ''));
 
         return response()->json($this->siteStatusPayload($tenant->fresh()));
+    }
+
+    public function activityChecksSetting()
+    {
+        $tenant = \App\Models\Tenant::find(auth()->user()->tenant_id);
+        return response()->json($this->activityChecksPayload($tenant));
+    }
+
+    public function updateActivityChecksSetting(Request $request)
+    {
+        $request->validate(['enabled' => 'sometimes|boolean', 'reverify' => 'sometimes|boolean']);
+        $tenant = \App\Models\Tenant::findOrFail(auth()->user()->tenant_id);
+        if ($request->has('reverify')) {
+            $tenant->update(['activity_reverify_enabled' => $request->boolean('reverify')]);
+            if (!$request->boolean('reverify')) {
+                \App\Models\TimeLog::where('tenant_id', $tenant->tenant_id)->whereNull('logout_time')->update(['forced_out_at' => null]);
+            }
+            return response()->json($this->activityChecksPayload($tenant->fresh()));
+        }
+        $tenant->update(['activity_checks_enabled' => $request->boolean('enabled')]);
+        if (!$request->boolean('enabled')) {
+            // Switching off stops checks for everyone right away, including open sessions.
+            \App\Models\ActivityCheck::where('tenant_id', $tenant->tenant_id)->where('status', 'pending')
+                ->update(['status' => 'cancelled', 'updated_at' => now()]);
+        }
+        return response()->json($this->activityChecksPayload($tenant->fresh()));
+    }
+
+    private function activityChecksPayload(?\App\Models\Tenant $tenant): array
+    {
+        return [
+            'enabled' => (bool) $tenant?->activity_checks_enabled,
+            'reverify' => (bool) $tenant?->activity_reverify_enabled,
+        ];
     }
 
     private function siteStatusPayload(?\App\Models\Tenant $tenant): array
@@ -447,6 +514,11 @@ class TenantAdminController extends Controller
                     'in_device' => $l->punch_in_device,
                     'out_ip' => $l->punch_out_ip,
                     'out_device' => $l->punch_out_device,
+                    'auto_out' => $l->auto_punch_out_reason,
+                    'checks' => $l->activity_checks ? [
+                        'passed' => \App\Models\ActivityCheck::where('time_log_id', $l->log_id)->where('status', 'passed')->count(),
+                        'missed' => \App\Models\ActivityCheck::where('time_log_id', $l->log_id)->where('status', 'missed')->count(),
+                    ] : null,
                 ];
             })->values();
 
@@ -647,6 +719,7 @@ class TenantAdminController extends Controller
             'total_hours' => round($totalHours, 4),
             'punch_out_address' => 'Manual punch by admin' . ($request->note ? ': ' . $request->note : ''),
         ]);
+        app(\App\Services\ActivityCheckService::class)->cancelForSession($log->log_id);
 
         return response()->json([
             'status' => 'success',

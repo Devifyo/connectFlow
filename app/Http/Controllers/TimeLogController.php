@@ -44,6 +44,9 @@ class TimeLogController extends Controller
             'punch_in_device' => $request->userAgent(),
         ]);
 
+        // Random "Are you active?" checks for this session.
+        app(\App\Services\ActivityCheckService::class)->scheduleForSession($log);
+
         return response()->json([
             'status' => 'success',
             'message' => 'Punched in.',
@@ -83,6 +86,7 @@ class TimeLogController extends Controller
             'punch_out_ip' => $request->ip(),
             'punch_out_device' => $request->userAgent(),
         ]);
+        app(\App\Services\ActivityCheckService::class)->cancelForSession($log->log_id);
 
         return response()->json([
             'status' => 'success',
